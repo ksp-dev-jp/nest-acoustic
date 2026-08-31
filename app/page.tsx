@@ -112,9 +112,8 @@ export default function Home() {
         <section className="min-w-0 px-4 py-5 sm:px-6 sm:py-7 xl:px-9" id="analysis">
           <div className="mb-6 flex flex-col justify-between gap-4 sm:flex-row sm:items-end">
             <div>
-              <p className="mb-1.5 text-[10px] font-semibold uppercase tracking-[0.18em] text-[#d8a64b]">Acoustic survey / 解析 #0124</p>
-              <h1 className="text-2xl font-medium tracking-[-0.025em] text-[#f1f5ef] sm:text-[30px]">長時間録音から、鳴き声を見つける。</h1>
-              <p className="mt-2 max-w-2xl text-sm leading-relaxed text-[#7c928e]">録音データを短区間に分割し、声紋とAI候補を照合。夜間に鳴く鳥を優先して抽出します。</p>
+              <p className="mb-1.5 text-[11px] font-semibold uppercase tracking-[0.22em] text-[#d8a64b]">NEST ACOUSTIC</p>
+              <h1 className="text-2xl font-medium tracking-[-0.025em] text-[#f1f5ef] sm:text-[30px]">鳥類音声解析</h1>
             </div>
             <Button className="h-10 shrink-0 rounded-xl bg-[#d8a64b] px-4 text-[#17201f] hover:bg-[#e4b65f]" onClick={() => inputRef.current?.click()}>
               <UploadCloud data-icon="inline-start" />音声を追加
