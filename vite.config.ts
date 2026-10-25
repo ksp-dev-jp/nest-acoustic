@@ -49,7 +49,7 @@ export default defineConfig(async () => {
     server: {
       watch: {
         ...(isCodexSeatbeltSandbox ? { useFsEvents: false, usePolling: true } : {}),
-        ignored: ['**/raw/**', '**/outputs/**'],
+        ignored: ['**/raw/**', '**/outputs/**', '**/dist-pages/**'],
       },
     },
     plugins: [
