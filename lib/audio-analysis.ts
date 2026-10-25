@@ -41,6 +41,7 @@ export type Detection = Candidate & {
   filterStatus: '山口県・季節適合' | '重点種・適期' | '重点種・参考';
   prioritySpecies: boolean;
   reviewStatus: ReviewStatus;
+  reviewedAt?: string;
   goshawkSeason?: string;
 };
 
@@ -421,10 +422,10 @@ export async function classifyCandidates(
   if (!candidates.length) return [];
   const ort = await import('onnxruntime-web/wasm');
   ort.env.wasm.numThreads = 1;
-  const assetOrigin = window.location.origin;
+  const assetBase = new URL(import.meta.env.BASE_URL, window.location.origin);
   ort.env.wasm.wasmPaths = {
-    mjs: `${assetOrigin}/ort/ort-wasm-simd-threaded.mjs`,
-    wasm: `${assetOrigin}/ort/ort-wasm-simd-threaded.wasm`,
+    mjs: new URL('ort/ort-wasm-simd-threaded.mjs', assetBase).href,
+    wasm: new URL('ort/ort-wasm-simd-threaded.wasm', assetBase).href,
   };
   const labelsPromise = loadLabels();
   const geoLabelsPromise = fetch(GEO_LABELS_URL).then(async (response) => {
