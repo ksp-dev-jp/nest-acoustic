@@ -1,3 +1,7 @@
+import {
+  PRIORITY_SPECIES, birdNetWeek, goshawkSeasonLabel, type ReviewStatus,
+} from '@/lib/species-filter';
+
 export type WavInfo = {
   audioFormat: number;
   channels: number;
@@ -33,6 +37,17 @@ export type Detection = Candidate & {
   scientific: string;
   confidence: number;
   commonEnglish: string;
+  geoProbability: number;
+  filterStatus: '山口県・季節適合' | '重点種・適期' | '重点種・参考';
+  prioritySpecies: boolean;
+  reviewStatus: ReviewStatus;
+  goshawkSeason?: string;
+};
+
+export type GeoFilterOptions = {
+  latitude: number;
+  longitude: number;
+  recordingStart: Date;
 };
 
 type FrameMetric = {
@@ -47,14 +62,20 @@ const MODEL_TAG = 'v1.1.2';
 const MODEL_BASE = `https://raw.githubusercontent.com/birdnet-team/birdnet-live-app/${MODEL_TAG}/assets/models`;
 const MODEL_URL = `https://media.githubusercontent.com/media/birdnet-team/birdnet-live-app/${MODEL_TAG}/assets/models/BirdNET%2B_V3.0-preview3.1_Global_10K-pruned_FP16.onnx`;
 const LABELS_URL = `${MODEL_BASE}/BirdNET%2B_V3.0-preview3.1_Global_10K-pruned_Labels.csv`;
+const GEO_MODEL_URL = `https://media.githubusercontent.com/media/birdnet-team/birdnet-live-app/${MODEL_TAG}/assets/models/BirdNET%2B_Geomodel_V3.0.4_Global_10K-pruned_FP16.onnx`;
+const GEO_LABELS_URL = `${MODEL_BASE}/BirdNET%2B_Geomodel_V3.0.4_Global_10K-pruned_Labels.txt`;
+const GEO_THRESHOLD = 0.03;
 
 const JAPANESE_NAMES: Record<string, string> = {
   'Asio flammeus': 'コミミズク',
   'Asio otus': 'トラフズク',
+  'Astur gentilis': 'オオタカ',
   'Bubo blakistoni': 'シマフクロウ',
   'Caprimulgus indicus': 'ヨタカ',
   'Caprimulgus jotaka': 'ヨタカ',
   'Glaucidium cuculoides': 'オオスズメフクロウ',
+  'Gorsachius goisagi': 'ミゾゴイ',
+  'Ninox japonica': 'アオバズク',
   'Ninox scutulata': 'アオバズク',
   'Otus semitorques': 'オオコノハズク',
   'Otus sunia': 'コノハズク',
@@ -66,6 +87,8 @@ const JAPANESE_NAMES: Record<string, string> = {
   'Cuculus canorus': 'カッコウ',
   'Turdus cardis': 'クロツグミ',
   'Turdus pallidus': 'シロハラ',
+  'Vanellus cinereus': 'ケリ',
+  'Zapornia fusca': 'ヒクイナ',
 };
 
 function ascii(view: DataView, offset: number, length: number) {
@@ -391,65 +414,120 @@ async function loadLabels(): Promise<BirdLabel[]> {
 export async function classifyCandidates(
   source: AudioSource,
   candidates: Candidate[],
+  geoFilter: GeoFilterOptions,
   onProgress: (value: number, detail: string) => void,
   signal?: AbortSignal,
 ): Promise<Detection[]> {
   if (!candidates.length) return [];
   const ort = await import('onnxruntime-web/wasm');
   ort.env.wasm.numThreads = 1;
+  const assetOrigin = window.location.origin;
   ort.env.wasm.wasmPaths = {
-    mjs: '/ort/ort-wasm-simd-threaded.mjs',
-    wasm: '/ort/ort-wasm-simd-threaded.wasm',
+    mjs: `${assetOrigin}/ort/ort-wasm-simd-threaded.mjs`,
+    wasm: `${assetOrigin}/ort/ort-wasm-simd-threaded.wasm`,
   };
   const labelsPromise = loadLabels();
-  const modelBytes = await fetchCached(MODEL_URL, (loaded, total) => {
-    const ratio = total ? loaded / total : Math.min(0.95, loaded / 65_000_000);
-    onProgress(36 + Math.round(ratio * 12), `BirdNET+モデルを準備中 ${Math.round(loaded / 1024 / 1024)}MB`);
+  const geoLabelsPromise = fetch(GEO_LABELS_URL).then(async (response) => {
+    if (!response.ok) throw new Error('地域・季節モデルの鳥種リストを取得できませんでした。');
+    return response.text();
   });
-  if (signal?.aborted) throw new DOMException('解析を中止しました', 'AbortError');
-  onProgress(49, 'BirdNET+モデルを起動中');
-  const [labels, session] = await Promise.all([
-    labelsPromise,
-    ort.InferenceSession.create(modelBytes, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' }),
+  const [modelBytes, geoModelBytes] = await Promise.all([
+    fetchCached(MODEL_URL, (loaded, total) => {
+      const ratio = total ? loaded / total : Math.min(0.95, loaded / 65_000_000);
+      onProgress(36 + Math.round(ratio * 7), `BirdNET+モデルを準備中 ${Math.round(loaded / 1024 / 1024)}MB`);
+    }),
+    fetchCached(GEO_MODEL_URL, (loaded, total) => {
+      const ratio = total ? loaded / total : Math.min(0.95, loaded / 14_000_000);
+      onProgress(43 + Math.round(ratio * 5), `山口県・季節フィルターを準備中 ${Math.round(loaded / 1024 / 1024)}MB`);
+    }),
   ]);
+  if (signal?.aborted) throw new DOMException('解析を中止しました', 'AbortError');
+  onProgress(49, '音声モデルと地域・季節モデルを起動中');
+  const [labels, geoLabelsText, session, geoSession] = await Promise.all([
+    labelsPromise,
+    geoLabelsPromise,
+    ort.InferenceSession.create(modelBytes, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' }),
+    ort.InferenceSession.create(geoModelBytes, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' }),
+  ]);
+
+  const geoResult = await geoSession.run({
+    [geoSession.inputNames[0]]: new ort.Tensor('float32', new Float32Array([
+      geoFilter.latitude,
+      geoFilter.longitude,
+      birdNetWeek(geoFilter.recordingStart),
+    ]), [1, 3]),
+  });
+  const geoProbabilities = geoResult[geoSession.outputNames[0]].data as Float32Array;
+  const geoScores = new Map<string, number>();
+  geoLabelsText.trim().split(/\r?\n/).forEach((line, index) => {
+    const [, scientific] = line.split('\t');
+    if (scientific) geoScores.set(scientific, Math.max(0, Number(geoProbabilities[index] ?? 0)));
+  });
+  await geoSession.release();
 
   const inputName = session.inputNames[0];
   const predictionName = session.outputNames.find((name) => name.includes('prediction')) ?? session.outputNames[0];
   const detections: Detection[] = [];
-  for (let index = 0; index < candidates.length; index++) {
-    if (signal?.aborted) throw new DOMException('解析を中止しました', 'AbortError');
-    const candidate = candidates[index];
-    const audio = await readModelWindow(source, candidate.start, 3);
-    const tensor = new ort.Tensor('float32', audio, [1, audio.length]);
-    const output = await session.run({ [inputName]: tensor });
-    const raw = output[predictionName].data as Float32Array;
-    const classCount = labels.length;
-    const frameCount = Math.max(1, Math.floor(raw.length / classCount));
-    let bestLabel: BirdLabel | undefined;
-    let bestScore = 0;
-    for (const label of labels) {
-      if (!label.bird) continue;
-      let score = 0;
-      for (let frame = 0; frame < frameCount; frame++) score = Math.max(score, Number(raw[frame * classCount + label.index] ?? 0));
-      if (score < 0 || score > 1) score = 1 / (1 + Math.exp(-score));
-      if (score > bestScore) {
-        bestScore = score;
-        bestLabel = label;
+  try {
+    for (let index = 0; index < candidates.length; index++) {
+      if (signal?.aborted) throw new DOMException('解析を中止しました', 'AbortError');
+      const candidate = candidates[index];
+      const audio = await readModelWindow(source, candidate.start, 3);
+      const tensor = new ort.Tensor('float32', audio, [1, audio.length]);
+      const output = await session.run({ [inputName]: tensor });
+      const raw = output[predictionName].data as Float32Array;
+      const classCount = labels.length;
+      const frameCount = Math.max(1, Math.floor(raw.length / classCount));
+      let bestRegional: { label: BirdLabel; score: number } | undefined;
+      let bestPriority: { label: BirdLabel; score: number } | undefined;
+      for (const label of labels) {
+        if (!label.bird) continue;
+        let score = 0;
+        for (let frame = 0; frame < frameCount; frame++) score = Math.max(score, Number(raw[frame * classCount + label.index] ?? 0));
+        if (score < 0 || score > 1) score = 1 / (1 + Math.exp(-score));
+        const geoProbability = geoScores.get(label.scientific) ?? 0;
+        if (geoProbability >= GEO_THRESHOLD && (!bestRegional || score > bestRegional.score)) {
+          bestRegional = { label, score };
+        }
+        if (PRIORITY_SPECIES.has(label.scientific) && (!bestPriority || score > bestPriority.score)) {
+          bestPriority = { label, score };
+        }
       }
+
+      const selectedLabels: { label: BirdLabel; score: number }[] = [];
+      if (bestPriority && bestPriority.score >= 0.05) selectedLabels.push(bestPriority);
+      if (bestRegional && bestRegional.score >= 0.18 && bestRegional.label.scientific !== bestPriority?.label.scientific) {
+        selectedLabels.push(bestRegional);
+      }
+      for (const selected of selectedLabels) {
+        const prioritySpecies = PRIORITY_SPECIES.has(selected.label.scientific);
+        const geoProbability = geoScores.get(selected.label.scientific) ?? 0;
+        detections.push({
+          ...candidate,
+          id: detections.length + 1,
+          species: JAPANESE_NAMES[selected.label.scientific] ?? selected.label.common,
+          scientific: selected.label.scientific,
+          commonEnglish: selected.label.common,
+          confidence: Math.round(selected.score * 100),
+          geoProbability: Math.round(geoProbability * 1000) / 10,
+          filterStatus: prioritySpecies
+            ? geoProbability >= GEO_THRESHOLD ? '重点種・適期' : '重点種・参考'
+            : '山口県・季節適合',
+          prioritySpecies,
+          reviewStatus: 'pending',
+          goshawkSeason: selected.label.scientific === 'Astur gentilis'
+            ? goshawkSeasonLabel(geoFilter.recordingStart)
+            : undefined,
+        });
+      }
+      onProgress(50 + Math.round(49 * (index + 1) / candidates.length), `地域・季節照合中 ${index + 1}/${candidates.length}`);
+      await new Promise((resolve) => setTimeout(resolve, 0));
     }
-    if (bestLabel && bestScore >= 0.18) {
-      detections.push({
-        ...candidate,
-        species: JAPANESE_NAMES[bestLabel.scientific] ?? bestLabel.common,
-        scientific: bestLabel.scientific,
-        commonEnglish: bestLabel.common,
-        confidence: Math.round(bestScore * 100),
-      });
-    }
-    onProgress(50 + Math.round(49 * (index + 1) / candidates.length), `鳥種を照合中 ${index + 1}/${candidates.length}`);
-    await new Promise((resolve) => setTimeout(resolve, 0));
+  } finally {
+    await session.release();
   }
-  return detections.sort((a, b) => Number(b.night) - Number(a.night) || b.confidence - a.confidence || a.start - b.start);
+  return detections.sort((a, b) => Number(b.prioritySpecies) - Number(a.prioritySpecies)
+    || Number(b.night) - Number(a.night) || b.confidence - a.confidence || a.start - b.start);
 }
 
 export async function createWavClip(source: AudioSource, start: number, duration: number) {
