@@ -20,6 +20,7 @@ import {
 import {
   REVIEW_REVISION, loadReviewSession, recordingId, saveReviewSession,
 } from '@/lib/review-session';
+import { isUnresolvedDetection, retainCandidateResults } from '@/lib/candidate-results';
 
 const emptyBars = Array.from({ length: 104 }, () => 8);
 const colors = ['#e8b45a', '#8eb9a9', '#c08fc1', '#76aadd', '#9db866', '#d38b72'];
@@ -48,8 +49,9 @@ export default function Home() {
   const [status, setStatus] = useState('音声ファイルを選択してください');
   const [error, setError] = useState('');
   const [isBusy, setIsBusy] = useState(false);
-  const [nightOnly, setNightOnly] = useState(true);
+  const [nightOnly, setNightOnly] = useState(false);
   const [reviewFilter, setReviewFilter] = useState<'all' | ReviewStatus>('all');
+  const [identificationFilter, setIdentificationFilter] = useState<'all' | 'species' | 'unresolved'>('all');
   const [query, setQuery] = useState('');
   const [recordingStart, setRecordingStart] = useState('');
   const [regionKey, setRegionKey] = useState('hagi');
@@ -57,6 +59,7 @@ export default function Home() {
   const [playing, setPlaying] = useState<number>();
   const [fileId, setFileId] = useState('');
   const [hasAnalysis, setHasAnalysis] = useState(false);
+  const [analysisRevision, setAnalysisRevision] = useState(REVIEW_REVISION);
   const [saveNotice, setSaveNotice] = useState('');
   const inputRef = useRef<HTMLInputElement>(null);
   const audioRef = useRef<HTMLAudioElement>(null);
@@ -75,24 +78,29 @@ export default function Home() {
     if (!source || !fileId || !hasAnalysis || isBusy) return;
     try {
       saveReviewSession(window.localStorage, {
-        version: 1, revision: REVIEW_REVISION, fileId, recordingStart, regionKey,
+        version: 1, revision: analysisRevision, fileId, recordingStart, regionKey,
         duration: source.duration, candidateCount, detections, overviewBars,
         listenedIds: [...listenedIds], savedAt: new Date().toISOString(),
       });
-      setSaveNotice('確認結果をこのブラウザに保存済み。同じ音声を選択すると再開できます。');
+      setSaveNotice(analysisRevision === REVIEW_REVISION
+        ? '確認結果をこのブラウザに保存済み。同じ音声を選択すると再開できます。'
+        : '以前の確認結果を復元しています。種未確定の候補も追加するには、CSVを保存したうえで再解析してください。');
     } catch {
       setSaveNotice('確認結果を保存できませんでした。ブラウザの保存設定・空き容量を確認し、CSVを出力してください。');
     }
-  }, [source, fileId, hasAnalysis, isBusy, recordingStart, regionKey, candidateCount, detections, overviewBars, listenedIds]);
+  }, [source, fileId, hasAnalysis, analysisRevision, isBusy, recordingStart, regionKey, candidateCount, detections, overviewBars, listenedIds]);
 
   const region = SURVEY_REGIONS.find((item) => item.key === regionKey) ?? SURVEY_REGIONS[0];
   const visibleDetections = useMemo(() => detections.filter((item) =>
     (!nightOnly || item.night)
     && (reviewFilter === 'all' || item.reviewStatus === reviewFilter)
+    && (identificationFilter === 'all' || (isUnresolvedDetection(item) ? 'unresolved' : 'species') === identificationFilter)
     && (`${item.species} ${item.scientific} ${item.commonEnglish}`).toLowerCase().includes(query.toLowerCase())),
-  [detections, nightOnly, query, reviewFilter]);
+  [detections, nightOnly, query, reviewFilter, identificationFilter]);
 
-  const speciesCount = new Set(detections.map((item) => item.scientific)).size;
+  const speciesCount = new Set(detections.filter((item) => !isUnresolvedDetection(item)).map((item) => item.scientific)).size;
+  const unresolvedCount = detections.filter(isUnresolvedDetection).length;
+  const selectedUnresolved = selected ? isUnresolvedDetection(selected) : false;
   const pendingCount = detections.filter((item) => item.reviewStatus === 'pending').length;
   const approvedCount = detections.filter((item) => item.reviewStatus === 'approved').length;
 
@@ -127,6 +135,7 @@ export default function Home() {
     stopPlayback();
     setHasAnalysis(false);
     setFileId('');
+    setAnalysisRevision(REVIEW_REVISION);
     setSaveNotice('');
     setIsBusy(true);
     setError('');
@@ -148,6 +157,7 @@ export default function Home() {
         const saved = loadReviewSession(window.localStorage, id, SURVEY_REGIONS.map((item) => item.key));
         if (saved && Math.abs(saved.duration - loaded.duration) < 0.01) {
           setRecordingStart(saved.recordingStart);
+          setAnalysisRevision(saved.revision);
           setRegionKey(saved.regionKey);
           setDetections(saved.detections);
           setSelected(saved.detections.find((item) => item.reviewStatus === 'pending') ?? saved.detections[0]);
@@ -174,6 +184,7 @@ export default function Home() {
     if (!source || !recordingStart) return;
     stopPlayback();
     setHasAnalysis(false);
+    setAnalysisRevision(REVIEW_REVISION);
     setListenedIds(new Set());
     setSaveNotice('');
     const controller = new AbortController();
@@ -197,20 +208,28 @@ export default function Home() {
         setHasAnalysis(true);
         return;
       }
-      const identified = await classifyCandidates(source, result.candidates, {
-        latitude: region.latitude,
-        longitude: region.longitude,
-        recordingStart: new Date(recordingStart),
-      }, (value, detail) => {
-        setProgress(value);
-        setStatus(detail);
-      }, controller.signal);
+      let identified: Detection[];
+      try {
+        identified = await classifyCandidates(source, result.candidates, {
+          latitude: region.latitude,
+          longitude: region.longitude,
+          recordingStart: new Date(recordingStart),
+        }, (value, detail) => {
+          setProgress(value);
+          setStatus(detail);
+        }, controller.signal);
+      } catch {
+        controller.signal.throwIfAborted();
+        identified = result.candidates.flatMap((candidate, index) =>
+          retainCandidateResults(candidate, [], index + 1, 'classification-unavailable'));
+        setError('鳥種の照合に失敗しました。音声候補は「種未確定」で残しています。原音を確認するか、接続環境を確認して再解析してください。');
+      }
       controller.signal.throwIfAborted();
       setDetections(identified);
       setSelected(identified[0]);
       setProgress(100);
       setHasAnalysis(true);
-      setStatus(identified.length ? `${identified.length}件の鳥類音声を検出しました` : '鳥種を特定できる候補はありませんでした');
+      setStatus(`${identified.length}件の音声候補を表示しています（種未確定 ${identified.filter(isUnresolvedDetection).length}件）`);
     } catch (reason) {
       if (reason instanceof DOMException && reason.name === 'AbortError') setStatus('解析を中止しました');
       else {
@@ -277,12 +296,13 @@ export default function Home() {
     const exported = scope === 'approved' ? detections.filter((item) => item.reviewStatus === 'approved') : detections;
     const rows = exported.map((item) => [
       source.file.name, formatClock(item.start), new Date(start.getTime() + item.start * 1000).toISOString(),
-      item.species, item.scientific, item.commonEnglish, item.confidence, item.band,
+      item.species, item.scientific, item.commonEnglish, item.confidence ?? '', item.band,
       item.night ? '夜間' : '昼間・薄明', region.name, region.latitude, region.longitude,
-      item.geoProbability, item.filterStatus, reviewStatusLabel(item.reviewStatus), item.goshawkSeason ?? '', item.reviewedAt ?? '',
+      item.geoProbability ?? '', item.filterStatus, reviewStatusLabel(item.reviewStatus), item.goshawkSeason ?? '', item.reviewedAt ?? '',
+      isUnresolvedDetection(item) ? '種未確定' : '種名候補あり',
     ]);
     const csv = [
-      ['ファイル', '開始位置', '検出日時', '候補種', '学名', '英名', 'AIスコア(%)', '主要周波数', '時間区分', '地域', '緯度', '経度', '地域季節スコア(%)', 'フィルター判定', '原音確認結果', 'オオタカ時期区分', '判定登録日時(UTC)'],
+      ['ファイル', '開始位置', '検出日時', '候補種', '学名', '英名', 'AI候補スコア(%)', '主要周波数', '時間区分', '地域', '緯度', '経度', '地域季節スコア(%)', 'フィルター判定', '原音確認結果', 'オオタカ時期区分', '判定登録日時(UTC)', '種名の状態'],
       ...rows,
     ].map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\r\n');
     saveBlob(new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' }), `${source.file.name.replace(/\.[^.]+$/, '')}_${scope === 'approved' ? 'approved' : 'detections'}.csv`);
@@ -303,7 +323,7 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-2">
             <Badge className="hidden border-[#39514c] bg-[#152625] px-2.5 text-[#a9bcb8] sm:flex" variant="outline"><span className="size-1.5 rounded-full bg-[#79b997]" />山口県・季節フィルター</Badge>
-            <Button aria-label="解析について" className="text-[#8da19e] hover:bg-white/5" onClick={() => window.alert('録音はブラウザ内で処理されます。BirdNET+の音声モデルに、山口県の座標と録音時期を使う地域・季節モデルを組み合わせます。重点種は見落としを防ぐため低いスコアから残し、原音確認後に承認または却下してください。')} size="icon" variant="ghost"><CircleHelp /></Button>
+            <Button aria-label="解析について" className="text-[#8da19e] hover:bg-white/5" onClick={() => window.alert('録音はブラウザ内で処理されます。山口県・録音時期で種名候補を選び、種名を付けられない音声区間も「鳥声候補・種未確定」で残します。鳥の声かどうかも原音で確認してください。種未確定の候補は承認後も種未確定のまま保存されます。AI候補スコアは正解率ではありません。初期抽出は最大160区間のため、すべての鳴き声を網羅するものではありません。')} size="icon" variant="ghost"><CircleHelp /></Button>
           </div>
         </div>
       </header>
@@ -317,7 +337,7 @@ export default function Home() {
             <a className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-[#829692] transition hover:bg-white/5" href="https://github.com/birdnet-team/birdnet-live-app" rel="noreferrer" target="_blank"><Bird className="size-4" />判定モデル</a>
           </nav>
           <div className="mt-auto space-y-2">
-            <div className="rounded-xl border border-[#263b38] bg-[#0e1d1d] p-3.5"><div className="mb-2 flex items-center gap-2 text-xs font-medium text-[#c9d4d1]"><Filter className="size-3.5 text-[#79b997]" />地域・季節で選別</div><p className="text-[11px] leading-relaxed text-[#6f8782]">BirdNET公式GeoModelで地域外種を除外。重点種は参考候補として残します。</p></div>
+            <div className="rounded-xl border border-[#263b38] bg-[#0e1d1d] p-3.5"><div className="mb-2 flex items-center gap-2 text-xs font-medium text-[#c9d4d1]"><Filter className="size-3.5 text-[#79b997]" />地域・季節で選別</div><p className="text-[11px] leading-relaxed text-[#6f8782]">地域・季節で種名候補を絞り込みます。種名を付けられない音声も原音確認用に残します。</p></div>
             <div className="rounded-xl border border-[#263b38] bg-[#0e1d1d] p-3.5"><div className="mb-2 flex items-center gap-2 text-xs font-medium text-[#c9d4d1]"><MoonStar className="size-3.5 text-[#d8a64b]" />夜間を優先</div><p className="text-[11px] leading-relaxed text-[#6f8782]">18:00〜翌6:00の検出を先頭に表示します。</p></div>
           </div>
         </aside>
@@ -355,7 +375,10 @@ export default function Home() {
                   {!source && <button className="absolute inset-0 z-20 m-auto flex h-fit w-fit flex-col items-center gap-2 text-xs text-[#6d837e]" onClick={() => inputRef.current?.click()}><UploadCloud className="size-7 text-[#9e814a]" /><span>録音データを選択</span></button>}
                 </div>
 
-                <div className="mt-4 flex flex-wrap items-center justify-between gap-3"><div className="flex items-center gap-2"><span className="text-[11px] text-[#657c77]">表示:</span><button className={`rounded-lg px-3 py-1.5 text-xs transition ${nightOnly ? 'bg-[#263a37] text-[#dce6e2]' : 'text-[#6e8580] hover:bg-white/5'}`} onClick={() => setNightOnly(true)}>夜間のみ</button><button className={`rounded-lg px-3 py-1.5 text-xs transition ${!nightOnly ? 'bg-[#263a37] text-[#dce6e2]' : 'text-[#6e8580] hover:bg-white/5'}`} onClick={() => setNightOnly(false)}>全時間帯</button></div><div className="flex flex-wrap gap-4 text-[11px] text-[#708782]"><span><b className="mr-1 text-base font-medium text-[#e3ebe8]">{detections.length}</b>検出</span><span><b className="mr-1 text-base font-medium text-[#e3ebe8]">{speciesCount}</b>候補種</span><span><b className="mr-1 text-base font-medium text-[#d8a64b]">{pendingCount}</b>未確認</span><span><b className="mr-1 text-base font-medium text-[#79b997]">{approvedCount}</b>承認</span></div></div>
+                <div className="mt-4 flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex items-center gap-2"><span className="text-[11px] text-[#657c77]">表示:</span><button className={`rounded-lg px-3 py-1.5 text-xs transition ${nightOnly ? 'bg-[#263a37] text-[#dce6e2]' : 'text-[#6e8580] hover:bg-white/5'}`} onClick={() => setNightOnly(true)}>夜間のみ</button><button className={`rounded-lg px-3 py-1.5 text-xs transition ${!nightOnly ? 'bg-[#263a37] text-[#dce6e2]' : 'text-[#6e8580] hover:bg-white/5'}`} onClick={() => setNightOnly(false)}>全時間帯</button></div>
+                  <div className="flex flex-wrap gap-4 text-[11px] text-[#708782]"><span><b className="mr-1 text-base font-medium text-[#e3ebe8]">{detections.length}</b>候補</span><span><b className="mr-1 text-base font-medium text-[#e3ebe8]">{speciesCount}</b>候補種</span><span><b className="mr-1 text-base font-medium text-[#c4a8dd]">{unresolvedCount}</b>種未確定</span><span><b className="mr-1 text-base font-medium text-[#d8a64b]">{pendingCount}</b>未確認</span><span><b className="mr-1 text-base font-medium text-[#79b997]">{approvedCount}</b>承認</span></div>
+                </div>
               </div>
             </section>
 
@@ -367,11 +390,15 @@ export default function Home() {
               {selected ? <>
                 <div className="relative mb-4 grid aspect-[1.72] place-items-center overflow-hidden rounded-xl border border-[#2b3e3a] bg-[#0a1515]"><div className="pointer-events-none absolute inset-0 opacity-35 [background-image:linear-gradient(rgba(126,165,153,.16)_1px,transparent_1px),linear-gradient(90deg,rgba(126,165,153,.16)_1px,transparent_1px)] [background-size:100%_25%,12.5%_100%]" /><div className="pointer-events-none z-10 flex h-20 w-[75%] items-center justify-center gap-1">{Array.from({ length: 34 }, (_, index) => <i className="w-0.5 rounded-full bg-[#d8a64b]" key={index} style={{ height: `${(12 + Math.abs(Math.sin(index * .72)) * 54).toFixed(2)}%`, opacity: Number((.35 + (index % 6) * .1).toFixed(2)) }} />)}</div><Button aria-label={playing === selected.id ? '検出音声を停止' : '検出音声を再生'} className="absolute z-20 grid size-11 place-items-center rounded-full bg-[#edf1e8] text-[#13201e] hover:bg-white" onClick={() => void playDetection(selected)} size="icon">{playing === selected.id ? <Pause className="fill-current" /> : <Play className="ml-0.5 fill-current" />}</Button></div>
                 <div className="space-y-3">
-                  <div><div className="mb-1 flex items-center gap-2"><p className="text-[10px] uppercase tracking-[0.14em] text-[#5f7772]">AI candidate</p>{selected.prioritySpecies && <Badge className="bg-[#3b3020] text-[#e3bd67]" variant="secondary">重点種</Badge>}</div><div className="flex items-end justify-between"><div><h3 className="text-xl font-medium text-[#f0f4ed]">{selected.species}</h3><p className="mt-0.5 text-xs italic text-[#758b87]">{selected.scientific}</p></div><span className="text-2xl font-light text-[#d8a64b]">{selected.confidence}<small className="text-xs">%</small></span></div></div>
-                  <div className="grid grid-cols-2 gap-2"><div className="rounded-lg bg-[#122322] p-3"><p className="text-[10px] text-[#647c77]">検出位置</p><p className="mt-1 text-sm font-medium text-[#cedad6]">{formatClock(selected.start)}</p></div><div className="rounded-lg bg-[#122322] p-3"><p className="text-[10px] text-[#647c77]">地域・季節</p><p className="mt-1 text-xs font-medium text-[#9fc4b5]">{selected.filterStatus}</p><p className="mt-0.5 text-[10px] text-[#5d7771]">Geo {selected.geoProbability}%</p></div></div>
+                  <div>
+                    <div className="mb-1 flex items-center gap-2"><p className="text-[10px] uppercase tracking-[0.14em] text-[#5f7772]">{selectedUnresolved ? 'Audio candidate' : 'AI candidate'}</p>{selected.prioritySpecies && <Badge className="bg-[#3b3020] text-[#e3bd67]" variant="secondary">重点種</Badge>}</div>
+                    <div className="flex items-end justify-between gap-2"><div><h3 className={`${selectedUnresolved ? 'text-lg' : 'text-xl'} font-medium text-[#f0f4ed]`}>{selected.species}</h3><p className="mt-0.5 text-xs italic text-[#758b87]">{selectedUnresolved ? '原音での確認が必要です' : selected.scientific}</p></div>{selected.confidence !== null && <div className="shrink-0 text-right"><p className="text-[9px] text-[#758b87]">AI候補スコア</p><span className="text-2xl font-light text-[#d8a64b]">{selected.confidence}<small className="text-xs">%</small></span></div>}</div>
+                  </div>
+                  <div className="grid grid-cols-2 gap-2"><div className="rounded-lg bg-[#122322] p-3"><p className="text-[10px] text-[#647c77]">検出位置</p><p className="mt-1 text-sm font-medium text-[#cedad6]">{formatClock(selected.start)}</p></div><div className="rounded-lg bg-[#122322] p-3"><p className="text-[10px] text-[#647c77]">地域・季節</p><p className="mt-1 text-xs font-medium text-[#9fc4b5]">{selected.filterStatus}</p><p className="mt-0.5 text-[10px] text-[#5d7771]">{selected.geoProbability === null ? '種名の照合は未確定' : `Geo ${selected.geoProbability}%`}</p></div></div>
+                  {selectedUnresolved && <div className="rounded-lg border border-[#493854] bg-[#211a29] px-3 py-2 text-[11px] leading-relaxed text-[#cbb5da]">{selected.unresolvedReason === 'classification-unavailable' ? '鳥種の照合を完了できなかった区間です。' : '種名候補を選べなかった区間です。'}鳥の声かどうかも原音で確認してください。承認しても種名は未確定のまま保存・出力されます。</div>}
                   {selected.goshawkSeason && <div className="rounded-lg border border-[#493c24] bg-[#241f15] px-3 py-2 text-[11px] leading-relaxed text-[#d8bd7d]">オオタカ: {selected.goshawkSeason}</div>}
                   <div aria-live="polite" className={`rounded-lg border px-3 py-2 text-[11px] ${listenedIds.has(selected.id) ? 'border-[#2d5143] bg-[#142a22] text-[#8fc8a5]' : 'border-[#4a3e26] bg-[#241f15] text-[#cdb375]'}`}><div className="flex items-center gap-2"><Headphones className="size-3.5" />{listenedIds.has(selected.id) ? '原音を最後まで再生済みです。判定を登録できます。' : playing === selected.id ? '原音を再生中です。再生完了後に判定できます。' : '先に原音を最後まで再生してから判定してください。'}</div></div>
-                  <div className="grid grid-cols-2 gap-2"><Button className="bg-[#2f704f] text-white hover:bg-[#38815c]" disabled={!listenedIds.has(selected.id)} onClick={() => updateReview(selected, 'approved')}><CheckCircle2 data-icon="inline-start" />承認</Button><Button className="border-[#6a3d37] bg-transparent text-[#d89a90] hover:bg-[#2c1a18]" disabled={!listenedIds.has(selected.id)} onClick={() => updateReview(selected, 'rejected')} variant="outline"><XCircle data-icon="inline-start" />却下</Button></div>
+                  <div className="grid grid-cols-2 gap-2"><Button className="bg-[#2f704f] text-white hover:bg-[#38815c]" disabled={!listenedIds.has(selected.id)} onClick={() => updateReview(selected, 'approved')}><CheckCircle2 data-icon="inline-start" />{selectedUnresolved ? '候補を承認' : '承認'}</Button><Button className="border-[#6a3d37] bg-transparent text-[#d89a90] hover:bg-[#2c1a18]" disabled={!listenedIds.has(selected.id)} onClick={() => updateReview(selected, 'rejected')} variant="outline"><XCircle data-icon="inline-start" />却下</Button></div>
                   <div className="grid grid-cols-[1fr_auto] gap-2"><Button className="border-[#324742] bg-transparent text-[#b2c1bd] hover:bg-[#162826]" onClick={() => void downloadClip(selected)} variant="outline"><Download data-icon="inline-start" />区間WAV</Button><Button aria-label="未確認に戻す" className="border-[#324742] bg-transparent text-[#819690] hover:bg-[#162826]" onClick={() => updateReview(selected, 'pending')} size="icon" variant="outline"><RotateCcw /></Button></div>
                 </div>
               </> : <div className="grid min-h-[390px] place-items-center rounded-xl border border-dashed border-[#2b3e3a] bg-[#0a1515] px-6 text-center"><div><Bird className="mx-auto mb-3 size-8 text-[#536d67]" /><p className="text-sm text-[#94a7a2]">検出結果がありません</p><p className="mt-2 text-[11px] leading-relaxed text-[#5f7772]">録音データを追加し、解析を開始してください。</p></div></div>}
@@ -380,9 +407,29 @@ export default function Home() {
 
           <section className="mt-4 overflow-hidden rounded-2xl border border-white/8 bg-[#0d1c1c]" id="records">
             {saveNotice && <p className="border-b border-white/7 px-5 py-3 text-[11px] text-[#99afa7]" role="status">{saveNotice}</p>}
-            <div className="flex flex-col justify-between gap-3 border-b border-white/7 px-4 py-4 xl:flex-row xl:items-center sm:px-5"><div><h2 className="text-sm font-medium text-[#dfe8e5]">AI候補 → 原音確認</h2><p className="mt-1 text-[11px] text-[#667e79]">{candidateCount ? `${candidateCount}区間を照合 · 未確認 ${pendingCount}件 · 承認 ${approvedCount}件` : '山口県・季節フィルターを通過した候補を表示します'}</p></div><div className="flex flex-wrap items-center gap-2"><label className="flex h-8 items-center gap-2 rounded-lg border border-[#2c413d] bg-[#0a1717] px-2.5 text-xs text-[#809590]"><Search className="size-3.5" /><input aria-label="鳥の種類を検索" className="w-24 bg-transparent text-[#c6d2ce] outline-none placeholder:text-[#526a65]" onChange={(event) => setQuery(event.target.value)} placeholder="種名で検索" value={query} /></label><select aria-label="確認状態で絞り込み" className="h-8 rounded-lg border border-[#2c413d] bg-[#0a1717] px-2.5 text-xs text-[#9aada8] outline-none" onChange={(event) => setReviewFilter(event.target.value as 'all' | ReviewStatus)} value={reviewFilter}><option value="all">全確認状態</option><option value="pending">未確認</option><option value="approved">承認</option><option value="rejected">却下</option></select><Button className="border-[#2c413d] bg-transparent text-[#849a95] hover:bg-white/5" disabled={!detections.length} onClick={() => downloadCsv('all')} size="sm" variant="outline"><Download data-icon="inline-start" />全件CSV</Button><Button className="border-[#315342] bg-[#173126] text-[#91c7a7] hover:bg-[#1d3c2e]" disabled={!approvedCount} onClick={() => downloadCsv('approved')} size="sm" variant="outline"><CheckCircle2 data-icon="inline-start" />承認済み</Button></div></div>
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/7 bg-[#101c20] px-5 py-3">
+              <label className="flex items-center gap-2 text-[11px] text-[#93a6a2]">種名の状態<select aria-label="種名の状態で絞り込み" className="h-8 rounded-lg border border-[#3b3548] bg-[#151721] px-2.5 text-xs text-[#c2aecf] outline-none" onChange={(event) => setIdentificationFilter(event.target.value as 'all' | 'species' | 'unresolved')} value={identificationFilter}><option value="all">すべての候補</option><option value="unresolved">種未確定のみ</option><option value="species">種名候補あり</option></select></label>
+              <p className="text-[11px] text-[#8b819a]">種未確定も再生・確認できます。承認後も種名は未確定のままです。</p>
+            </div>
+            <div className="flex flex-col justify-between gap-3 border-b border-white/7 px-4 py-4 xl:flex-row xl:items-center sm:px-5">
+              <div><h2 className="text-sm font-medium text-[#dfe8e5]">AI候補 → 原音確認</h2><p className="mt-1 text-[11px] text-[#667e79]">{candidateCount ? `${candidateCount}区間の音声候補 · 種未確定 ${unresolvedCount}件 · 未確認 ${pendingCount}件 · 承認 ${approvedCount}件` : '種名を付けられない音声候補も原音確認用に残します'}</p></div>
+              <div className="flex flex-wrap items-center gap-2">
+                <label className="flex h-8 items-center gap-2 rounded-lg border border-[#2c413d] bg-[#0a1717] px-2.5 text-xs text-[#809590]"><Search className="size-3.5" /><input aria-label="鳥の種類を検索" className="w-24 bg-transparent text-[#c6d2ce] outline-none placeholder:text-[#526a65]" onChange={(event) => setQuery(event.target.value)} placeholder="種名で検索" value={query} /></label>
+                <select aria-label="確認状態で絞り込み" className="h-8 rounded-lg border border-[#2c413d] bg-[#0a1717] px-2.5 text-xs text-[#9aada8] outline-none" onChange={(event) => setReviewFilter(event.target.value as 'all' | ReviewStatus)} value={reviewFilter}><option value="all">全確認状態</option><option value="pending">未確認</option><option value="approved">承認</option><option value="rejected">却下</option></select>
+                <Button className="border-[#2c413d] bg-transparent text-[#849a95] hover:bg-white/5" disabled={!detections.length} onClick={() => downloadCsv('all')} size="sm" variant="outline"><Download data-icon="inline-start" />全件CSV</Button>
+                <Button className="border-[#315342] bg-[#173126] text-[#91c7a7] hover:bg-[#1d3c2e]" disabled={!approvedCount} onClick={() => downloadCsv('approved')} size="sm" variant="outline"><CheckCircle2 data-icon="inline-start" />承認済み</Button>
+              </div>
+            </div>
             <div className="overflow-x-auto"><table className="w-full min-w-[980px] text-left"><thead className="border-b border-white/6 bg-[#0b1818] text-[10px] uppercase tracking-[0.1em] text-[#536c67]"><tr><th className="px-5 py-3 font-medium">位置</th><th className="px-4 py-3 font-medium">候補種</th><th className="px-4 py-3 font-medium">AI</th><th className="px-4 py-3 font-medium">地域・季節</th><th className="px-4 py-3 font-medium">時間</th><th className="px-4 py-3 font-medium">原音確認</th><th className="px-5 py-3" /></tr></thead><tbody>
-              {visibleDetections.map((item, index) => <tr className={`cursor-pointer border-b border-white/5 text-xs transition hover:bg-white/[.025] ${selected?.id === item.id ? 'bg-[#132523]' : ''} ${item.reviewStatus === 'rejected' ? 'opacity-55' : ''}`} key={item.id} onClick={() => setSelected(item)}><td className="px-5 py-3.5 font-mono text-[#a7b8b4]">{formatClock(item.start)}</td><td className="px-4 py-3.5"><div className="flex items-center gap-3"><span className="size-2 rounded-full" style={{ backgroundColor: colors[index % colors.length] }} /><div><div className="flex items-center gap-1.5"><p className="font-medium text-[#dbe4e1]">{item.species}</p>{item.prioritySpecies && <span className="rounded bg-[#46391f] px-1.5 py-0.5 text-[9px] text-[#dbb85f]">重点</span>}</div><p className="mt-0.5 text-[10px] italic text-[#607873]">{item.scientific}</p></div></div></td><td className="px-4 py-3.5"><span className="font-mono text-[#d7b267]">{item.confidence}%</span></td><td className="px-4 py-3.5"><p className="text-[#91b7aa]">{item.filterStatus}</p><p className="mt-0.5 text-[10px] text-[#526a65]">Geo {item.geoProbability}%</p></td><td className="px-4 py-3.5"><Badge className={item.night ? 'bg-[#1e3034] text-[#8eb7bd]' : 'bg-[#263324] text-[#a9be91]'} variant="secondary">{item.night ? '夜間' : '昼間・薄明'}</Badge></td><td className="px-4 py-3.5"><Badge className={item.reviewStatus === 'approved' ? 'bg-[#20382d] text-[#8fd0a7]' : item.reviewStatus === 'rejected' ? 'bg-[#3a2523] text-[#dfa095]' : 'bg-[#3b3422] text-[#dbbd73]'} variant="secondary">{reviewStatusLabel(item.reviewStatus)}</Badge></td><td className="px-5 py-3.5"><Button aria-label={`${item.species}を再生`} className="text-[#728984] hover:bg-white/5" onClick={(event) => { event.stopPropagation(); void playDetection(item); }} size="icon-sm" variant="ghost">{playing === item.id ? <Pause /> : <Play />}</Button></td></tr>)}
+              {visibleDetections.map((item, index) => <tr className={`cursor-pointer border-b border-white/5 text-xs transition hover:bg-white/[.025] ${selected?.id === item.id ? 'bg-[#132523]' : ''} ${item.reviewStatus === 'rejected' ? 'opacity-55' : ''}`} key={item.id} onClick={() => setSelected(item)}>
+                <td className="px-5 py-3.5 font-mono text-[#a7b8b4]">{formatClock(item.start)}</td>
+                <td className="px-4 py-3.5"><div className="flex items-center gap-3"><span className="size-2 rounded-full" style={{ backgroundColor: isUnresolvedDetection(item) ? '#c4a8dd' : colors[index % colors.length] }} /><div><div className="flex items-center gap-1.5"><p className={`font-medium ${isUnresolvedDetection(item) ? 'text-[#cbb5da]' : 'text-[#dbe4e1]'}`}>{item.species}</p>{item.prioritySpecies && <span className="rounded bg-[#46391f] px-1.5 py-0.5 text-[9px] text-[#dbb85f]">重点</span>}</div><p className="mt-0.5 text-[10px] italic text-[#607873]">{item.scientific || '原音確認待ち'}</p></div></div></td>
+                <td className="px-4 py-3.5"><span className="font-mono text-[#d7b267]">{item.confidence === null ? '—' : `${item.confidence}%`}</span></td>
+                <td className="px-4 py-3.5"><p className="text-[#91b7aa]">{item.filterStatus}</p><p className="mt-0.5 text-[10px] text-[#526a65]">{item.geoProbability === null ? '要原音確認' : `Geo ${item.geoProbability}%`}</p></td>
+                <td className="px-4 py-3.5"><Badge className={item.night ? 'bg-[#1e3034] text-[#8eb7bd]' : 'bg-[#263324] text-[#a9be91]'} variant="secondary">{item.night ? '夜間' : '昼間・薄明'}</Badge></td>
+                <td className="px-4 py-3.5"><Badge className={item.reviewStatus === 'approved' ? 'bg-[#20382d] text-[#8fd0a7]' : item.reviewStatus === 'rejected' ? 'bg-[#3a2523] text-[#dfa095]' : 'bg-[#3b3422] text-[#dbbd73]'} variant="secondary">{reviewStatusLabel(item.reviewStatus)}</Badge></td>
+                <td className="px-5 py-3.5"><Button aria-label={`${item.species}を再生`} className="text-[#728984] hover:bg-white/5" onClick={(event) => { event.stopPropagation(); void playDetection(item); }} size="icon-sm" variant="ghost">{playing === item.id ? <Pause /> : <Play />}</Button></td>
+              </tr>)}
               {!visibleDetections.length && <tr><td className="px-5 py-10 text-center text-xs text-[#5f7772]" colSpan={7}>{detections.length ? '条件に一致する検出はありません。' : '解析結果はここに表示されます。'}</td></tr>}
             </tbody></table></div>
           </section>

@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { REVIEW_REVISION, loadReviewSession, recordingId, saveReviewSession } from '../lib/review-session.ts';
+import { REVIEW_REVISION, LEGACY_REVIEW_REVISION, loadReviewSession, recordingId, saveReviewSession } from '../lib/review-session.ts';
+import { isUnresolvedDetection, retainCandidateResults } from '../lib/candidate-results.ts';
 
 function memoryStorage() {
   const entries = new Map();
@@ -74,4 +75,68 @@ test('fingerprint distinguishes same-name recordings and includes the recording 
   assert.equal(await recordingId(first), await recordingId(copy));
   assert.notEqual(await recordingId(first), await recordingId(different));
   assert.notEqual(await recordingId(first), await recordingId(new File([bytes], name, { lastModified: 2 })));
+});
+
+test('audio interval with no accepted species remains reviewable without invented scores', () => {
+  const candidate = { id: 42, start: 2, end: 5, peakTime: 3, strength: 10, dominantHz: 1500, band: '1 kHz', night: true };
+  const result = retainCandidateResults(candidate, [], 7);
+  assert.equal(result.length, 1);
+  assert.equal(result[0].id, 7);
+  assert.equal(result[0].start, candidate.start);
+  assert.equal(result[0].end, candidate.end);
+  assert.equal(result[0].night, true);
+  assert.equal(isUnresolvedDetection(result[0]), true);
+  assert.equal(result[0].scientific, '');
+  assert.equal(result[0].confidence, null);
+  assert.equal(result[0].geoProbability, null);
+  assert.equal(result[0].reviewStatus, 'pending');
+});
+
+test('accepted species results retain their identities and do not gain a duplicate unresolved row', () => {
+  const named = fixture().detections;
+  assert.equal(retainCandidateResults(named[0], named, 999), named);
+  assert.equal(isUnresolvedDetection(named[0]), false);
+});
+
+test('approved unresolved audio stays unresolved after save and restore', () => {
+  const saved = fixture();
+  saved.detections = retainCandidateResults(saved.detections[0], [], 1);
+  saved.detections[0].reviewStatus = 'approved';
+  saved.detections[0].reviewedAt = saved.savedAt;
+  const storage = memoryStorage();
+  saveReviewSession(storage, saved);
+  const restored = loadReviewSession(storage, saved.fileId, ['hagi']);
+  assert.equal(restored.detections[0].reviewStatus, 'approved');
+  assert.equal(restored.detections[0].identification, 'unresolved');
+  assert.equal(restored.detections[0].scientific, '');
+  assert.equal(restored.detections[0].confidence, null);
+});
+
+test('unresolved results cannot restore with a fabricated score or assigned species', () => {
+  for (const change of [(s) => { s.confidence = 90; }, (s) => { s.scientific = 'Astur gentilis'; }, (s) => { s.geoProbability = 0; }]) {
+    const saved = fixture();
+    saved.detections = retainCandidateResults(saved.detections[0], [], 1);
+    change(saved.detections[0]);
+    const storage = memoryStorage();
+    saveReviewSession(storage, saved);
+    assert.throws(() => loadReviewSession(storage, saved.fileId, ['hagi']));
+  }
+});
+
+test('legacy decisions remain readable and keep their original analysis revision', () => {
+  const saved = fixture();
+  saved.revision = LEGACY_REVIEW_REVISION;
+  const storage = memoryStorage();
+  saveReviewSession(storage, saved);
+  const restored = loadReviewSession(storage, saved.fileId, ['hagi']);
+  assert.equal(restored.revision, LEGACY_REVIEW_REVISION);
+  assert.equal(restored.detections[0].reviewStatus, 'approved');
+});
+
+test('classification service failure keeps the audio available as unresolved', () => {
+  const candidate = fixture().detections[0];
+  const [result] = retainCandidateResults(candidate, [], 1, 'classification-unavailable');
+  assert.equal(result.unresolvedReason, 'classification-unavailable');
+  assert.equal(result.reviewStatus, 'pending');
+  assert.equal(result.confidence, null);
 });

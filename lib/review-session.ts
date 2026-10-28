@@ -1,7 +1,8 @@
 import type { Detection } from './audio-analysis';
 
 // Bump this revision when a model or filtering rule changes the saved candidates.
-export const REVIEW_REVISION = 'birdnet3-preview3.1-geo3.0.4-filter1';
+export const REVIEW_REVISION = 'birdnet3-preview3.1-geo3.0.4-unresolved1';
+export const LEGACY_REVIEW_REVISION = 'birdnet3-preview3.1-geo3.0.4-filter1';
 const PREFIX = 'nest-acoustic:review:v1:';
 
 type SessionStorage = Pick<Storage, 'getItem' | 'setItem'>;
@@ -47,7 +48,7 @@ function finite(value: unknown): value is number {
 
 function isDetection(value: unknown, duration: number): value is Detection {
   if (!isRecord(value)) return false;
-  if (!['id', 'start', 'end', 'peakTime', 'strength', 'dominantHz', 'confidence', 'geoProbability']
+  if (!['id', 'start', 'end', 'peakTime', 'strength', 'dominantHz']
     .every((key) => finite(value[key]))) return false;
   if (!Number.isInteger(value.id) || (value.id as number) < 0
     || (value.start as number) < 0 || (value.end as number) <= (value.start as number)
@@ -55,7 +56,18 @@ function isDetection(value: unknown, duration: number): value is Detection {
   if (!['species', 'scientific', 'commonEnglish', 'band'].every((key) => typeof value[key] === 'string')) return false;
   if (typeof value.night !== 'boolean' || typeof value.prioritySpecies !== 'boolean') return false;
   if (!['pending', 'approved', 'rejected'].includes(value.reviewStatus as string)) return false;
-  if (!['山口県・季節適合', '重点種・適期', '重点種・参考'].includes(value.filterStatus as string)) return false;
+  if (value.identification === 'unresolved') {
+    if (value.confidence !== null || value.geoProbability !== null || value.scientific !== ''
+      || value.commonEnglish !== '' || value.species !== '鳥声候補・種未確定'
+      || value.filterStatus !== '種未確定' || value.prioritySpecies !== false
+      || value.goshawkSeason !== undefined
+      || !['species-not-selected', 'classification-unavailable'].includes(value.unresolvedReason as string)) return false;
+  } else {
+    if (value.identification !== undefined && value.identification !== 'species') return false;
+    if (!finite(value.confidence) || value.confidence < 0 || value.confidence > 100
+      || !finite(value.geoProbability) || value.geoProbability < 0 || value.geoProbability > 100) return false;
+    if (!['山口県・季節適合', '重点種・適期', '重点種・参考'].includes(value.filterStatus as string)) return false;
+  }
   if (value.goshawkSeason !== undefined && typeof value.goshawkSeason !== 'string') return false;
   if (value.reviewedAt !== undefined && (typeof value.reviewedAt !== 'string' || !Number.isFinite(Date.parse(value.reviewedAt)))) return false;
   return true;
@@ -65,7 +77,7 @@ export function loadReviewSession(storage: SessionStorage, fileId: string, regio
   const json = storage.getItem(PREFIX + fileId);
   if (!json) return undefined;
   const value: unknown = JSON.parse(json);
-  if (!isRecord(value) || value.version !== 1 || value.revision !== REVIEW_REVISION
+  if (!isRecord(value) || value.version !== 1 || ![REVIEW_REVISION, LEGACY_REVIEW_REVISION].includes(value.revision as string)
     || value.fileId !== fileId || !regionKeys.includes(value.regionKey as string)
     || typeof value.recordingStart !== 'string' || !Number.isFinite(Date.parse(value.recordingStart))
     || !finite(value.duration) || value.duration <= 0

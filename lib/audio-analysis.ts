@@ -1,6 +1,7 @@
 import {
   PRIORITY_SPECIES, birdNetWeek, goshawkSeasonLabel, type ReviewStatus,
 } from '@/lib/species-filter';
+import { retainCandidateResults } from '@/lib/candidate-results';
 
 export type WavInfo = {
   audioFormat: number;
@@ -33,12 +34,14 @@ export type Candidate = {
 };
 
 export type Detection = Candidate & {
+  identification?: 'species' | 'unresolved';
+  unresolvedReason?: 'species-not-selected' | 'classification-unavailable';
   species: string;
   scientific: string;
-  confidence: number;
+  confidence: number | null;
   commonEnglish: string;
-  geoProbability: number;
-  filterStatus: '山口県・季節適合' | '重点種・適期' | '重点種・参考';
+  geoProbability: number | null;
+  filterStatus: '山口県・季節適合' | '重点種・適期' | '重点種・参考' | '種未確定';
   prioritySpecies: boolean;
   reviewStatus: ReviewStatus;
   reviewedAt?: string;
@@ -427,12 +430,7 @@ export async function classifyCandidates(
     mjs: new URL('ort/ort-wasm-simd-threaded.mjs', assetBase).href,
     wasm: new URL('ort/ort-wasm-simd-threaded.wasm', assetBase).href,
   };
-  const labelsPromise = loadLabels();
-  const geoLabelsPromise = fetch(GEO_LABELS_URL).then(async (response) => {
-    if (!response.ok) throw new Error('地域・季節モデルの鳥種リストを取得できませんでした。');
-    return response.text();
-  });
-  const [modelBytes, geoModelBytes] = await Promise.all([
+  const [modelBytes, geoModelBytes, labels, geoLabelsText] = await Promise.all([
     fetchCached(MODEL_URL, (loaded, total) => {
       const ratio = total ? loaded / total : Math.min(0.95, loaded / 65_000_000);
       onProgress(36 + Math.round(ratio * 7), `BirdNET+モデルを準備中 ${Math.round(loaded / 1024 / 1024)}MB`);
@@ -441,12 +439,15 @@ export async function classifyCandidates(
       const ratio = total ? loaded / total : Math.min(0.95, loaded / 14_000_000);
       onProgress(43 + Math.round(ratio * 5), `山口県・季節フィルターを準備中 ${Math.round(loaded / 1024 / 1024)}MB`);
     }),
+    loadLabels(),
+    fetch(GEO_LABELS_URL).then(async (response) => {
+      if (!response.ok) throw new Error('地域・季節モデルの鳥種リストを取得できませんでした。');
+      return response.text();
+    }),
   ]);
   if (signal?.aborted) throw new DOMException('解析を中止しました', 'AbortError');
   onProgress(49, '音声モデルと地域・季節モデルを起動中');
-  const [labels, geoLabelsText, session, geoSession] = await Promise.all([
-    labelsPromise,
-    geoLabelsPromise,
+  const [session, geoSession] = await Promise.all([
     ort.InferenceSession.create(modelBytes, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' }),
     ort.InferenceSession.create(geoModelBytes, { executionProviders: ['wasm'], graphOptimizationLevel: 'all' }),
   ]);
@@ -500,12 +501,14 @@ export async function classifyCandidates(
       if (bestRegional && bestRegional.score >= 0.18 && bestRegional.label.scientific !== bestPriority?.label.scientific) {
         selectedLabels.push(bestRegional);
       }
+      const candidateDetections: Detection[] = [];
       for (const selected of selectedLabels) {
         const prioritySpecies = PRIORITY_SPECIES.has(selected.label.scientific);
         const geoProbability = geoScores.get(selected.label.scientific) ?? 0;
-        detections.push({
+        candidateDetections.push({
           ...candidate,
-          id: detections.length + 1,
+          id: detections.length + candidateDetections.length + 1,
+          identification: 'species',
           species: JAPANESE_NAMES[selected.label.scientific] ?? selected.label.common,
           scientific: selected.label.scientific,
           commonEnglish: selected.label.common,
@@ -521,6 +524,7 @@ export async function classifyCandidates(
             : undefined,
         });
       }
+      detections.push(...retainCandidateResults(candidate, candidateDetections, detections.length + 1));
       onProgress(50 + Math.round(49 * (index + 1) / candidates.length), `地域・季節照合中 ${index + 1}/${candidates.length}`);
       await new Promise((resolve) => setTimeout(resolve, 0));
     }
@@ -528,7 +532,8 @@ export async function classifyCandidates(
     await session.release();
   }
   return detections.sort((a, b) => Number(b.prioritySpecies) - Number(a.prioritySpecies)
-    || Number(b.night) - Number(a.night) || b.confidence - a.confidence || a.start - b.start);
+    || Number(b.night) - Number(a.night)
+    || (b.confidence ?? -1) - (a.confidence ?? -1) || a.start - b.start);
 }
 
 export async function createWavClip(source: AudioSource, start: number, duration: number) {
