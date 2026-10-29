@@ -34,6 +34,8 @@ export type Candidate = {
 };
 
 export type Detection = Candidate & {
+  // Maximum individual bird-species score; a review-order proxy, not P(bird).
+  maxBirdScore?: number;
   identification?: 'species' | 'unresolved';
   unresolvedReason?: 'species-not-selected' | 'classification-unavailable';
   species: string;
@@ -500,11 +502,13 @@ export async function classifyCandidates(
       const frameCount = Math.max(1, Math.floor(raw.length / classCount));
       let bestRegional: { label: BirdLabel; score: number } | undefined;
       let bestPriority: { label: BirdLabel; score: number } | undefined;
+      let maxBirdScore = 0;
       for (const label of labels) {
         if (!label.bird) continue;
         let score = 0;
         for (let frame = 0; frame < frameCount; frame++) score = Math.max(score, Number(raw[frame * classCount + label.index] ?? 0));
         if (score < 0 || score > 1) score = 1 / (1 + Math.exp(-score));
+        maxBirdScore = Math.max(maxBirdScore, score);
         const geoProbability = geoScores.get(label.scientific) ?? 0;
         if (geoProbability >= GEO_THRESHOLD && (!bestRegional || score > bestRegional.score)) {
           bestRegional = { label, score };
@@ -542,7 +546,8 @@ export async function classifyCandidates(
             : undefined,
         });
       }
-      detections.push(...retainCandidateResults(candidate, candidateDetections, detections.length + 1));
+      detections.push(...retainCandidateResults(candidate, candidateDetections, detections.length + 1)
+        .map((item) => ({ ...item, maxBirdScore })));
       onProgress(50 + Math.round(49 * (index + 1) / candidates.length), `地域・季節照合中 ${index + 1}/${candidates.length}`);
       await new Promise((resolve) => setTimeout(resolve, 0));
     }

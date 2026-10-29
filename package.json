@@ -12,6 +12,7 @@
     "preview:pages": "vite preview --config vite.pages.config.ts --host 127.0.0.1 --port 4173",
     "test:review": "node --test scripts/review-session.test.mjs",
     "test:audio": "node --test scripts/candidate-extraction.test.mjs",
+    "test:audit": "node --test scripts/audit-evaluation.test.mjs",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
     "format": "oxfmt"

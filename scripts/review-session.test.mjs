@@ -1,7 +1,21 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import { REVIEW_REVISION, PREVIOUS_REVIEW_REVISION, LEGACY_REVIEW_REVISION, loadReviewSession, recordingId, saveReviewSession } from '../lib/review-session.ts';
-import { isUnresolvedDetection, retainCandidateResults } from '../lib/candidate-results.ts';
+import { isUnresolvedDetection, retainCandidateResults, scoreGroup } from '../lib/candidate-results.ts';
+
+test('review ranking never invents a score for old or failed classifications', () => {
+  assert.equal(scoreGroup({}), 'unmeasured');
+  assert.equal(scoreGroup({ maxBirdScore: 0 }), 'lower');
+  assert.equal(scoreGroup({ maxBirdScore: .1 }), 'standard');
+  const storage = memoryStorage();
+  const saved = fixture();
+  saved.detections[0].maxBirdScore = .04;
+  saveReviewSession(storage, saved);
+  assert.equal(loadReviewSession(storage, saved.fileId, ['hagi']).detections[0].maxBirdScore, .04);
+  saved.detections[0].maxBirdScore = 4;
+  saveReviewSession(storage, saved);
+  assert.throws(() => loadReviewSession(storage, saved.fileId, ['hagi']));
+});
 
 function memoryStorage() {
   const entries = new Map();

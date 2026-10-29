@@ -20,7 +20,7 @@ import {
 import {
   REVIEW_REVISION, loadReviewSession, recordingId, saveReviewSession,
 } from '@/lib/review-session';
-import { isUnresolvedDetection, retainCandidateResults } from '@/lib/candidate-results';
+import { isUnresolvedDetection, retainCandidateResults, scoreGroup, scoreGroupLabel } from '@/lib/candidate-results';
 
 const emptyBars = Array.from({ length: 104 }, () => 8);
 const colors = ['#e8b45a', '#8eb9a9', '#c08fc1', '#76aadd', '#9db866', '#d38b72'];
@@ -52,6 +52,7 @@ export default function Home() {
   const [nightOnly, setNightOnly] = useState(false);
   const [reviewFilter, setReviewFilter] = useState<'all' | ReviewStatus>('all');
   const [identificationFilter, setIdentificationFilter] = useState<'all' | 'species' | 'unresolved'>('all');
+  const [scoreFilter, setScoreFilter] = useState<'all' | ReturnType<typeof scoreGroup>>('all');
   const [query, setQuery] = useState('');
   const [resultPage, setResultPage] = useState(0);
   const [recordingStart, setRecordingStart] = useState('');
@@ -96,13 +97,14 @@ export default function Home() {
     (!nightOnly || item.night)
     && (reviewFilter === 'all' || item.reviewStatus === reviewFilter)
     && (identificationFilter === 'all' || (isUnresolvedDetection(item) ? 'unresolved' : 'species') === identificationFilter)
+    && (scoreFilter === 'all' || scoreGroup(item) === scoreFilter)
     && (`${item.species} ${item.scientific} ${item.commonEnglish}`).toLowerCase().includes(query.toLowerCase())),
-  [detections, nightOnly, query, reviewFilter, identificationFilter]);
+  [detections, nightOnly, query, reviewFilter, identificationFilter, scoreFilter]);
   const pageSize = 50;
   const pageCount = Math.max(1, Math.ceil(visibleDetections.length / pageSize));
   const currentPage = Math.min(resultPage, pageCount - 1);
   const pageDetections = visibleDetections.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
-  useEffect(() => { setResultPage(0); }, [nightOnly, query, reviewFilter, identificationFilter, source]);
+  useEffect(() => { setResultPage(0); }, [nightOnly, query, reviewFilter, identificationFilter, scoreFilter, source]);
 
   const speciesCount = new Set(detections.filter((item) => !isUnresolvedDetection(item)).map((item) => item.scientific)).size;
   const unresolvedCount = detections.filter(isUnresolvedDetection).length;
@@ -306,9 +308,10 @@ export default function Home() {
       item.night ? '夜間' : '昼間・薄明', region.name, region.latitude, region.longitude,
       item.geoProbability ?? '', item.filterStatus, reviewStatusLabel(item.reviewStatus), item.goshawkSeason ?? '', item.reviewedAt ?? '',
       isUnresolvedDetection(item) ? '種未確定' : '種名候補あり',
+      item.maxBirdScore === undefined ? '' : Math.round(item.maxBirdScore * 1000) / 10, scoreGroupLabel(item),
     ]);
     const csv = [
-      ['ファイル', '開始位置', '検出日時', '候補種', '学名', '英名', 'AI候補スコア(%)', '主要周波数', '時間区分', '地域', '緯度', '経度', '地域季節スコア(%)', 'フィルター判定', '原音確認結果', 'オオタカ時期区分', '判定登録日時(UTC)', '種名の状態'],
+      ['ファイル', '開始位置', '検出日時', '候補種', '学名', '英名', 'AI候補スコア(%)', '主要周波数', '時間区分', '地域', '緯度', '経度', '地域季節スコア(%)', 'フィルター判定', '原音確認結果', 'オオタカ時期区分', '判定登録日時(UTC)', '種名の状態', '最大鳥種スコア(%)・鳥声確率ではない', '確認順の参考(試験)'],
       ...rows,
     ].map((row) => row.map((value) => `"${String(value).replaceAll('"', '""')}"`).join(',')).join('\r\n');
     saveBlob(new Blob([`\ufeff${csv}`], { type: 'text/csv;charset=utf-8' }), `${source.file.name.replace(/\.[^.]+$/, '')}_${scope === 'approved' ? 'approved' : 'detections'}.csv`);
@@ -416,7 +419,8 @@ export default function Home() {
             {saveNotice && <p className="border-b border-white/7 px-5 py-3 text-[11px] text-[#99afa7]" role="status">{saveNotice}</p>}
             <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/7 bg-[#101c20] px-5 py-3">
               <label className="flex items-center gap-2 text-[11px] text-[#93a6a2]">種名の状態<select aria-label="種名の状態で絞り込み" className="h-8 rounded-lg border border-[#3b3548] bg-[#151721] px-2.5 text-xs text-[#c2aecf] outline-none" onChange={(event) => setIdentificationFilter(event.target.value as 'all' | 'species' | 'unresolved')} value={identificationFilter}><option value="all">すべての候補</option><option value="unresolved">種未確定のみ</option><option value="species">種名候補あり</option></select></label>
-              <p className="text-[11px] text-[#8b819a]">種未確定も再生・確認できます。承認後も種名は未確定のままです。</p>
+              <label className="flex items-center gap-2 text-[11px] text-[#93a6a2]">確認順の参考（試験）<select aria-label="AIスコア区分で絞り込み" className="h-8 rounded-lg border border-[#2c413d] bg-[#0a1717] px-2.5 text-xs" value={scoreFilter} onChange={(event) => setScoreFilter(event.target.value as typeof scoreFilter)}><option value="all">全候補を残す</option><option value="standard">通常確認（最大種スコア0.1以上）</option><option value="lower">低スコア・要確認</option><option value="unmeasured">未計測（過去結果など）</option></select></label>
+              <p className="text-[11px] text-[#8b819a]">低スコアは雑音確定ではありません。全候補を残し、原音で確認します。過去結果の区分には再解析が必要です。</p>
             </div>
             <div className="flex flex-col justify-between gap-3 border-b border-white/7 px-4 py-4 xl:flex-row xl:items-center sm:px-5">
               <div><h2 className="text-sm font-medium text-[#dfe8e5]">AI候補 → 原音確認</h2><p className="mt-1 text-[11px] text-[#667e79]">{candidateCount ? `${candidateCount}区間の音声候補 · 種未確定 ${unresolvedCount}件 · 未確認 ${pendingCount}件 · 承認 ${approvedCount}件` : '種名を付けられない音声候補も原音確認用に残します'}</p></div>
@@ -442,6 +446,7 @@ export default function Home() {
             {visibleDetections.length > 0 && <nav aria-label="候補一覧のページ" className="flex flex-wrap items-center justify-between gap-3 border-t border-white/7 px-5 py-3 text-[11px] text-[#849b94]"><span>{visibleDetections.length}件中 {currentPage * pageSize + 1}〜{Math.min(visibleDetections.length, (currentPage + 1) * pageSize)}件 · CSVは全ページを出力</span><div className="flex items-center gap-3"><Button aria-label="前の候補ページ" disabled={currentPage === 0} onClick={() => setResultPage(currentPage - 1)} size="sm" variant="ghost">前へ</Button><span>{currentPage + 1} / {pageCount}</span><Button aria-label="次の候補ページ" disabled={currentPage + 1 >= pageCount} onClick={() => setResultPage(currentPage + 1)} size="sm" variant="ghost">次へ</Button></div></nav>}
           </section>
           <div className="mt-3 flex flex-col justify-between gap-2 text-[10px] text-[#48625d] sm:flex-row"><p>録音データと確認結果はアップロードされず、ブラウザ内で処理されます。</p><p>BirdNET+ v3.0-preview3.1 + GeoModel v3.0.4 · 最終同定は専門家確認を推奨</p></div>
+          <p className="mt-3 text-[11px] text-[#94b7a6]"><a href="./audit.html" className="underline underline-offset-4">精度検証用の原音確認</a><span className="ml-2 text-[#667e79]">実験結果JSONから、候補がない区間も確認できます。</span></p>
         </section>
       </div>
     </main>

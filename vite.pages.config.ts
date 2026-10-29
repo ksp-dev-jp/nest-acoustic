@@ -11,6 +11,10 @@ export default defineConfig({
   plugins: [react()],
   css: { postcss: { plugins: [tailwindcss()] } },
   build: {
+    rollupOptions: { input: {
+      main: fileURLToPath(new URL('./pages/index.html', import.meta.url)),
+      audit: fileURLToPath(new URL('./pages/audit.html', import.meta.url)),
+    } },
     outDir: fileURLToPath(new URL('./dist-pages', import.meta.url)),
     emptyOutDir: true,
   },

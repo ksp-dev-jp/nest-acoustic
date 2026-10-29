@@ -70,6 +70,7 @@ function isDetection(value: unknown, duration: number): value is Detection {
     if (!['山口県・季節適合', '重点種・適期', '重点種・参考'].includes(value.filterStatus as string)) return false;
   }
   if (value.goshawkSeason !== undefined && typeof value.goshawkSeason !== 'string') return false;
+  if (value.maxBirdScore !== undefined && (!finite(value.maxBirdScore) || value.maxBirdScore < 0 || value.maxBirdScore > 1)) return false;
   if (value.reviewedAt !== undefined && (typeof value.reviewedAt !== 'string' || !Number.isFinite(Date.parse(value.reviewedAt)))) return false;
   return true;
 }
