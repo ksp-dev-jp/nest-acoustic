@@ -1,6 +1,6 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { REVIEW_REVISION, LEGACY_REVIEW_REVISION, loadReviewSession, recordingId, saveReviewSession } from '../lib/review-session.ts';
+import { REVIEW_REVISION, PREVIOUS_REVIEW_REVISION, LEGACY_REVIEW_REVISION, loadReviewSession, recordingId, saveReviewSession } from '../lib/review-session.ts';
 import { isUnresolvedDetection, retainCandidateResults } from '../lib/candidate-results.ts';
 
 function memoryStorage() {
@@ -139,4 +139,18 @@ test('classification service failure keeps the audio available as unresolved', (
   assert.equal(result.unresolvedReason, 'classification-unavailable');
   assert.equal(result.reviewStatus, 'pending');
   assert.equal(result.confidence, null);
+});
+
+test('previous unresolved sessions keep their revision and approved audio decisions', () => {
+  const saved = fixture();
+  saved.revision = PREVIOUS_REVIEW_REVISION;
+  saved.detections = retainCandidateResults(saved.detections[0], [], 1);
+  saved.detections[0].reviewStatus = 'approved';
+  saved.detections[0].reviewedAt = saved.savedAt;
+  const storage = memoryStorage();
+  saveReviewSession(storage, saved);
+  const restored = loadReviewSession(storage, saved.fileId, ['hagi']);
+  assert.equal(restored.revision, PREVIOUS_REVIEW_REVISION);
+  assert.equal(restored.detections[0].reviewStatus, 'approved');
+  assert.equal(restored.detections[0].identification, 'unresolved');
 });

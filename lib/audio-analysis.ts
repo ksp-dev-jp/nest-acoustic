@@ -59,6 +59,7 @@ type FrameMetric = {
   db: number;
   birdRatio: number;
   dominantHz: number;
+  bandDb: number[];
 };
 
 const TARGET_RATE = 32_000;
@@ -213,11 +214,23 @@ export async function readModelWindow(source: AudioSource, start: number, second
   return resample(input, source.sampleRate, TARGET_RATE, seconds * TARGET_RATE);
 }
 
+// Reuse the window and twiddle factors: continuous scanning performs many FFTs.
+const fftPlans = new Map<number, { window: Float64Array; cos: Float64Array; sin: Float64Array }>();
 function fftMagnitude(input: Float32Array) {
   const n = input.length;
+  let plan = fftPlans.get(n);
+  if (!plan) {
+    plan = { window: new Float64Array(n), cos: new Float64Array(n / 2), sin: new Float64Array(n / 2) };
+    for (let i = 0; i < n; i++) plan.window[i] = 0.5 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1));
+    for (let i = 0; i < n / 2; i++) {
+      plan.cos[i] = Math.cos(-2 * Math.PI * i / n);
+      plan.sin[i] = Math.sin(-2 * Math.PI * i / n);
+    }
+    fftPlans.set(n, plan);
+  }
   const real = new Float64Array(n);
   const imag = new Float64Array(n);
-  for (let i = 0; i < n; i++) real[i] = input[i] * (0.5 - 0.5 * Math.cos(2 * Math.PI * i / (n - 1)));
+  for (let i = 0; i < n; i++) real[i] = input[i] * plan.window[i];
   for (let i = 1, j = 0; i < n; i++) {
     let bit = n >> 1;
     for (; j & bit; bit >>= 1) j ^= bit;
@@ -225,12 +238,11 @@ function fftMagnitude(input: Float32Array) {
     if (i < j) [real[i], real[j]] = [real[j], real[i]];
   }
   for (let size = 2; size <= n; size <<= 1) {
-    const angle = -2 * Math.PI / size;
     const half = size >> 1;
     for (let offset = 0; offset < n; offset += size) {
       for (let k = 0; k < half; k++) {
-        const c = Math.cos(angle * k);
-        const s = Math.sin(angle * k);
+        const c = plan.cos[k * n / size];
+        const s = plan.sin[k * n / size];
         const even = offset + k;
         const odd = even + half;
         const tr = c * real[odd] - s * imag[odd];
@@ -254,19 +266,23 @@ function frameMetric(frame: Float32Array, sampleRate: number, time: number): Fra
   let bird = 0;
   let dominant = 0;
   let dominantPower = 0;
+  const bandPower = [0, 0, 0, 0, 0, 0];
   for (let bin = 1; bin < spectrum.length; bin++) {
     const hz = bin * sampleRate / frame.length;
     const power = spectrum[bin];
     total += power;
     if (hz >= 250 && hz <= Math.min(12_000, sampleRate / 2)) {
       bird += power;
+      const band = Math.min(5, Math.floor(Math.log2(hz / 250)));
+      bandPower[band] += power;
       if (power > dominantPower) {
         dominantPower = power;
         dominant = hz;
       }
     }
   }
-  return { time, db, birdRatio: bird / Math.max(total, 1e-12), dominantHz: dominant };
+  return { time, db, birdRatio: bird / Math.max(total, 1e-12), dominantHz: dominant,
+    bandDb: bandPower.map((power) => 10 * Math.log10(power / (frame.length * frame.length) + 1e-16)) };
 }
 
 function median(values: number[]) {
@@ -294,57 +310,65 @@ export async function detectCandidates(
   onProgress: (value: number, detail: string) => void,
   signal?: AbortSignal,
 ) {
-  const metrics: FrameMetric[] = [];
+  const levels: number[] = [];
+  const bucketCount = 104;
+  const overview = Array<number>(bucketCount).fill(-Infinity);
+  const ranked: (FrameMetric & { strength: number })[] = [];
   const chunkSeconds = 60;
-  const hopSeconds = 2.5;
+  const scanRate = 24_000;
   const fftSize = 1024;
+  const hopFrames = 512; // Overlapping 42.7 ms frames: no gaps between measurements.
   const totalChunks = Math.ceil(source.duration / chunkSeconds);
 
   for (let chunkIndex = 0; chunkIndex < totalChunks; chunkIndex++) {
     if (signal?.aborted) throw new DOMException('解析を中止しました', 'AbortError');
     const chunkStart = chunkIndex * chunkSeconds;
     const chunkDuration = Math.min(chunkSeconds, source.duration - chunkStart);
-    const samples = await readMono(source, chunkStart, chunkDuration);
-    for (let local = 0; local < chunkDuration; local += hopSeconds) {
-      let bestFrame: Float32Array | undefined;
-      let bestDb = -Infinity;
-      let bestTime = chunkStart + local;
-      for (const fraction of [0.1, 0.35, 0.6, 0.85]) {
-        const start = Math.min(Math.max(0, samples.length - fftSize), Math.floor((local + hopSeconds * fraction) * source.sampleRate));
-        const frame = samples.slice(start, start + fftSize);
-        if (frame.length < fftSize) continue;
-        let sum = 0;
-        for (const value of frame) sum += value * value;
-        const db = 20 * Math.log10(Math.sqrt(sum / frame.length) + 1e-8);
-        if (db > bestDb) {
-          bestDb = db;
-          bestFrame = frame;
-          bestTime = chunkStart + start / source.sampleRate;
-        }
-      }
-      if (bestFrame) metrics.push(frameMetric(bestFrame, source.sampleRate, bestTime));
+    // Read a frame past chunk boundaries so calls straddling a minute are measured.
+    const samples = resample(await readMono(source, chunkStart, chunkDuration + fftSize / scanRate), source.sampleRate, scanRate);
+    const localMetrics: FrameMetric[] = [];
+    for (let offset = 0; offset < chunkDuration * scanRate; offset += hopFrames) {
+      if (signal?.aborted) throw new DOMException('解析を中止しました', 'AbortError');
+      const frame = samples.subarray(offset, offset + fftSize);
+      localMetrics.push(frameMetric(frame, scanRate, chunkStart + Math.min(chunkDuration, (offset + fftSize / 2) / scanRate)));
+      if (offset % (hopFrames * 256) === 0) await new Promise((resolve) => setTimeout(resolve, 0));
     }
+    // Estimate each frequency band's background locally; quiet calls need not
+    // exceed the loudest part of a multi-hour recording.
+    const floors = Array.from({ length: 6 }, (_, band) => {
+      const values = localMetrics.map((item) => item.bandDb[band]).sort((a, b) => a - b);
+      return values[Math.floor((values.length - 1) * 0.2)] ?? -160;
+    });
+    const buckets = new Map<number, FrameMetric & { strength: number }>();
+    for (const item of localMetrics) {
+      const strength = Math.max(...item.bandDb.map((db, band) => db - floors[band]));
+      if (item.db < -85 || item.birdRatio < 0.15 || strength < 6) continue;
+      const bucket = Math.floor(item.time / 1.5);
+      const existing = buckets.get(bucket);
+      if (!existing || strength > existing.strength) buckets.set(bucket, { ...item, strength });
+    }
+    for (const item of localMetrics) {
+      levels.push(item.db);
+      const bucket = Math.min(bucketCount - 1, Math.floor(item.time / source.duration * bucketCount));
+      overview[bucket] = Math.max(overview[bucket], item.db);
+    }
+    ranked.push(...buckets.values());
     onProgress(5 + Math.round(30 * (chunkIndex + 1) / totalChunks), `録音を走査中 ${chunkIndex + 1}/${totalChunks}`);
     if (chunkIndex % 3 === 0) await new Promise((resolve) => setTimeout(resolve, 0));
   }
 
-  const noiseFloor = median(metrics.map((item) => item.db));
-  const mad = median(metrics.map((item) => Math.abs(item.db - noiseFloor)));
-  const threshold = noiseFloor + Math.max(5, mad * 2.8);
-  const ranked = metrics
-    .filter((item) => item.db >= threshold && item.birdRatio >= 0.22 && item.dominantHz >= 250)
-    .map((item) => ({ ...item, strength: item.db - threshold }))
-    .sort((a, b) => b.strength - a.strength);
+  const noiseFloor = median(levels);
+  const threshold = 6; // dB above the local per-band background, not global RMS.
+  ranked.sort((a, b) => b.strength - a.strength);
 
   const accepted: typeof ranked = [];
   for (const item of ranked) {
-    if (accepted.some((existing) => Math.abs(existing.time - item.time) < 2.7)) continue;
+    if (accepted.some((existing) => Math.abs(existing.time - item.time) < 1.5)) continue;
     accepted.push(item);
   }
 
   const candidates = accepted
     .sort((a, b) => Number(isNightAt(b.time, recordingStart)) - Number(isNightAt(a.time, recordingStart)) || b.strength - a.strength)
-    .slice(0, 160)
     .map<Candidate>((item, index) => {
       const start = Math.max(0, Math.min(source.duration - 3, item.time - 1.5));
       return {
@@ -359,13 +383,7 @@ export async function detectCandidates(
       };
     });
 
-  const bucketCount = 104;
-  const overview = Array.from({ length: bucketCount }, (_, bucket) => {
-    const from = bucket * source.duration / bucketCount;
-    const to = (bucket + 1) * source.duration / bucketCount;
-    const values = metrics.filter((item) => item.time >= from && item.time < to).map((item) => item.db);
-    return values.length ? Math.max(...values) : noiseFloor;
-  });
+  for (let i = 0; i < bucketCount; i++) if (!Number.isFinite(overview[i])) overview[i] = noiseFloor;
   const low = Math.min(...overview);
   const high = Math.max(...overview);
   const bars = overview.map((value) => 10 + 68 * (value - low) / Math.max(1, high - low));

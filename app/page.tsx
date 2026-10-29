@@ -53,6 +53,7 @@ export default function Home() {
   const [reviewFilter, setReviewFilter] = useState<'all' | ReviewStatus>('all');
   const [identificationFilter, setIdentificationFilter] = useState<'all' | 'species' | 'unresolved'>('all');
   const [query, setQuery] = useState('');
+  const [resultPage, setResultPage] = useState(0);
   const [recordingStart, setRecordingStart] = useState('');
   const [regionKey, setRegionKey] = useState('hagi');
   const [listenedIds, setListenedIds] = useState<Set<number>>(new Set());
@@ -84,7 +85,7 @@ export default function Home() {
       });
       setSaveNotice(analysisRevision === REVIEW_REVISION
         ? '確認結果をこのブラウザに保存済み。同じ音声を選択すると再開できます。'
-        : '以前の確認結果を復元しています。種未確定の候補も追加するには、CSVを保存したうえで再解析してください。');
+        : '以前の抽出条件による確認結果です。見逃し抑制の新しい抽出を使うには、CSVを保存したうえで再解析してください。');
     } catch {
       setSaveNotice('確認結果を保存できませんでした。ブラウザの保存設定・空き容量を確認し、CSVを出力してください。');
     }
@@ -97,6 +98,11 @@ export default function Home() {
     && (identificationFilter === 'all' || (isUnresolvedDetection(item) ? 'unresolved' : 'species') === identificationFilter)
     && (`${item.species} ${item.scientific} ${item.commonEnglish}`).toLowerCase().includes(query.toLowerCase())),
   [detections, nightOnly, query, reviewFilter, identificationFilter]);
+  const pageSize = 50;
+  const pageCount = Math.max(1, Math.ceil(visibleDetections.length / pageSize));
+  const currentPage = Math.min(resultPage, pageCount - 1);
+  const pageDetections = visibleDetections.slice(currentPage * pageSize, (currentPage + 1) * pageSize);
+  useEffect(() => { setResultPage(0); }, [nightOnly, query, reviewFilter, identificationFilter, source]);
 
   const speciesCount = new Set(detections.filter((item) => !isUnresolvedDetection(item)).map((item) => item.scientific)).size;
   const unresolvedCount = detections.filter(isUnresolvedDetection).length;
@@ -323,7 +329,7 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-2">
             <Badge className="hidden border-[#39514c] bg-[#152625] px-2.5 text-[#a9bcb8] sm:flex" variant="outline"><span className="size-1.5 rounded-full bg-[#79b997]" />山口県・季節フィルター</Badge>
-            <Button aria-label="解析について" className="text-[#8da19e] hover:bg-white/5" onClick={() => window.alert('録音はブラウザ内で処理されます。山口県・録音時期で種名候補を選び、種名を付けられない音声区間も「鳥声候補・種未確定」で残します。鳥の声かどうかも原音で確認してください。種未確定の候補は承認後も種未確定のまま保存されます。AI候補スコアは正解率ではありません。初期抽出は最大160区間のため、すべての鳴き声を網羅するものではありません。')} size="icon" variant="ghost"><CircleHelp /></Button>
+            <Button aria-label="解析について" className="text-[#8da19e] hover:bg-white/5" onClick={() => window.alert('録音はブラウザ内で処理されます。音声を連続して測定し、1分ごとの周波数帯別の背景音から候補を抽出します。候補の160区間制限はありません。山口県・録音時期で種名候補を選び、種名を付けられない音声区間も「鳥声候補・種未確定」で残します。鳥の声かどうかも原音で確認してください。種未確定の候補は承認後も種未確定のまま保存されます。AI候補スコアは正解率ではありません。小さな声や雑音と重なる声の見逃しは残ります。')} size="icon" variant="ghost"><CircleHelp /></Button>
           </div>
         </div>
       </header>
@@ -362,6 +368,7 @@ export default function Home() {
                   <label className="rounded-lg border border-[#293d39] bg-[#0a1717] px-3 py-2"><span className="mb-1 flex items-center gap-1.5 text-[10px] text-[#607873]"><MapPin className="size-3" />地域・季節フィルター</span><select className="w-full bg-[#0a1717] text-xs text-[#cbd7d3] outline-none" disabled={!source || isBusy} onChange={(event) => { invalidateAnalysis(); setRegionKey(event.target.value); }} value={regionKey}>{SURVEY_REGIONS.map((item) => <option key={item.key} value={item.key}>{item.name}</option>)}</select></label>
                 </div>
                 {source && <div className="mb-4 flex flex-wrap items-center gap-2 rounded-lg border border-[#243a35] bg-[#0a1717] px-3 py-2 text-[10px] text-[#718983]"><ShieldCheck className="size-3.5 text-[#79b997]" /><span>{region.name}（{region.latitude.toFixed(3)}, {region.longitude.toFixed(3)}）</span><span className="text-[#49635d]">•</span><span>録音月から48週区分を自動設定</span><span className="text-[#49635d]">•</span><span>重点種は5%以上を確認対象</span></div>}
+                <div className="mb-4 rounded-lg border border-[#354638] bg-[#142219] px-3 py-2 text-[11px] leading-relaxed text-[#a0baa2]"><b className="font-medium text-[#c5d9bd]">見逃し抑制の抽出</b> · 短い音も連続測定し、周囲の雑音に合わせて抽出します。候補数の上限なし。候補の増加により解析と原音確認に時間がかかります。</div>
 
                 {(isBusy || progress > 0 || error) && <div className={`mb-5 rounded-xl border p-3 ${error ? 'border-[#663f38] bg-[#251816]' : 'border-[#31423e] bg-[#122322]'}`}><div className="mb-2 flex justify-between gap-4 text-[11px]"><span className={error ? 'text-[#e0a394]' : 'text-[#9cafaa]'}>{error || status}</span><span className="shrink-0 text-[#8fa29d]">{progress}%</span></div><Progress className="[&_[data-slot=progress-indicator]]:bg-[#d8a64b] [&_[data-slot=progress-track]]:bg-[#273936]" value={progress} /></div>}
 
@@ -421,7 +428,7 @@ export default function Home() {
               </div>
             </div>
             <div className="overflow-x-auto"><table className="w-full min-w-[980px] text-left"><thead className="border-b border-white/6 bg-[#0b1818] text-[10px] uppercase tracking-[0.1em] text-[#536c67]"><tr><th className="px-5 py-3 font-medium">位置</th><th className="px-4 py-3 font-medium">候補種</th><th className="px-4 py-3 font-medium">AI</th><th className="px-4 py-3 font-medium">地域・季節</th><th className="px-4 py-3 font-medium">時間</th><th className="px-4 py-3 font-medium">原音確認</th><th className="px-5 py-3" /></tr></thead><tbody>
-              {visibleDetections.map((item, index) => <tr className={`cursor-pointer border-b border-white/5 text-xs transition hover:bg-white/[.025] ${selected?.id === item.id ? 'bg-[#132523]' : ''} ${item.reviewStatus === 'rejected' ? 'opacity-55' : ''}`} key={item.id} onClick={() => setSelected(item)}>
+              {pageDetections.map((item, index) => <tr className={`cursor-pointer border-b border-white/5 text-xs transition hover:bg-white/[.025] ${selected?.id === item.id ? 'bg-[#132523]' : ''} ${item.reviewStatus === 'rejected' ? 'opacity-55' : ''}`} key={item.id} onClick={() => setSelected(item)}>
                 <td className="px-5 py-3.5 font-mono text-[#a7b8b4]">{formatClock(item.start)}</td>
                 <td className="px-4 py-3.5"><div className="flex items-center gap-3"><span className="size-2 rounded-full" style={{ backgroundColor: isUnresolvedDetection(item) ? '#c4a8dd' : colors[index % colors.length] }} /><div><div className="flex items-center gap-1.5"><p className={`font-medium ${isUnresolvedDetection(item) ? 'text-[#cbb5da]' : 'text-[#dbe4e1]'}`}>{item.species}</p>{item.prioritySpecies && <span className="rounded bg-[#46391f] px-1.5 py-0.5 text-[9px] text-[#dbb85f]">重点</span>}</div><p className="mt-0.5 text-[10px] italic text-[#607873]">{item.scientific || '原音確認待ち'}</p></div></div></td>
                 <td className="px-4 py-3.5"><span className="font-mono text-[#d7b267]">{item.confidence === null ? '—' : `${item.confidence}%`}</span></td>
@@ -432,6 +439,7 @@ export default function Home() {
               </tr>)}
               {!visibleDetections.length && <tr><td className="px-5 py-10 text-center text-xs text-[#5f7772]" colSpan={7}>{detections.length ? '条件に一致する検出はありません。' : '解析結果はここに表示されます。'}</td></tr>}
             </tbody></table></div>
+            {visibleDetections.length > 0 && <nav aria-label="候補一覧のページ" className="flex flex-wrap items-center justify-between gap-3 border-t border-white/7 px-5 py-3 text-[11px] text-[#849b94]"><span>{visibleDetections.length}件中 {currentPage * pageSize + 1}〜{Math.min(visibleDetections.length, (currentPage + 1) * pageSize)}件 · CSVは全ページを出力</span><div className="flex items-center gap-3"><Button aria-label="前の候補ページ" disabled={currentPage === 0} onClick={() => setResultPage(currentPage - 1)} size="sm" variant="ghost">前へ</Button><span>{currentPage + 1} / {pageCount}</span><Button aria-label="次の候補ページ" disabled={currentPage + 1 >= pageCount} onClick={() => setResultPage(currentPage + 1)} size="sm" variant="ghost">次へ</Button></div></nav>}
           </section>
           <div className="mt-3 flex flex-col justify-between gap-2 text-[10px] text-[#48625d] sm:flex-row"><p>録音データと確認結果はアップロードされず、ブラウザ内で処理されます。</p><p>BirdNET+ v3.0-preview3.1 + GeoModel v3.0.4 · 最終同定は専門家確認を推奨</p></div>
         </section>

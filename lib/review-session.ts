@@ -1,7 +1,8 @@
 import type { Detection } from './audio-analysis';
 
 // Bump this revision when a model or filtering rule changes the saved candidates.
-export const REVIEW_REVISION = 'birdnet3-preview3.1-geo3.0.4-unresolved1';
+export const REVIEW_REVISION = 'birdnet3-preview3.1-geo3.0.4-recall2';
+export const PREVIOUS_REVIEW_REVISION = 'birdnet3-preview3.1-geo3.0.4-unresolved1';
 export const LEGACY_REVIEW_REVISION = 'birdnet3-preview3.1-geo3.0.4-filter1';
 const PREFIX = 'nest-acoustic:review:v1:';
 
@@ -77,7 +78,7 @@ export function loadReviewSession(storage: SessionStorage, fileId: string, regio
   const json = storage.getItem(PREFIX + fileId);
   if (!json) return undefined;
   const value: unknown = JSON.parse(json);
-  if (!isRecord(value) || value.version !== 1 || ![REVIEW_REVISION, LEGACY_REVIEW_REVISION].includes(value.revision as string)
+  if (!isRecord(value) || value.version !== 1 || ![REVIEW_REVISION, PREVIOUS_REVIEW_REVISION, LEGACY_REVIEW_REVISION].includes(value.revision as string)
     || value.fileId !== fileId || !regionKeys.includes(value.regionKey as string)
     || typeof value.recordingStart !== 'string' || !Number.isFinite(Date.parse(value.recordingStart))
     || !finite(value.duration) || value.duration <= 0
