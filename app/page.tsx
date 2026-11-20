@@ -1,7 +1,7 @@
 'use client';
 
 import {
-  AudioWaveform, Bird, CalendarDays, CheckCircle2, CircleHelp, Download, FileAudio,
+  AudioWaveform, Bird, BookOpen, CalendarDays, CheckCircle2, CircleHelp, Download, FileAudio,
   Filter, Headphones, MapPin, MoonStar, Pause, Play, RotateCcw, Search,
   ShieldCheck, Sparkles, Square, UploadCloud, XCircle,
 } from 'lucide-react';
@@ -21,6 +21,7 @@ import {
   REVIEW_REVISION, loadReviewSession, recordingId, saveReviewSession,
 } from '@/lib/review-session';
 import { isUnresolvedDetection, retainCandidateResults, scoreGroup, scoreGroupLabel } from '@/lib/candidate-results';
+import { kaleidoscopeCsv, ravenSelectionTable, speciesSummaryCsv } from '@/lib/exports';
 
 const emptyBars = Array.from({ length: 104 }, () => 8);
 const colors = ['#e8b45a', '#8eb9a9', '#c08fc1', '#76aadd', '#9db866', '#d38b72'];
@@ -298,6 +299,20 @@ export default function Home() {
     saveBlob(clip, `${source.file.name.replace(/\.[^.]+$/, '')}_${formatClock(item.start).replaceAll(':', '-')}_${item.species}.wav`);
   }
 
+  /** All candidates with their review status, in formats for Kaleidoscope, Raven and per-species totals. */
+  function downloadFormat(kind: 'kaleidoscope' | 'raven' | 'summary') {
+    if (!source || !detections.length) return;
+    const context = { fileName: source.file.name, recordingStart: new Date(recordingStart), region };
+    const base = source.file.name.replace(/\.[^.]+$/, '');
+    if (kind === 'kaleidoscope') {
+      saveBlob(new Blob([kaleidoscopeCsv(detections, context)], { type: 'text/csv;charset=utf-8' }), `${base}_kaleidoscope.csv`);
+    } else if (kind === 'raven') {
+      saveBlob(new Blob([ravenSelectionTable(detections, context)], { type: 'text/plain;charset=utf-8' }), `${base}_raven.selection.table.txt`);
+    } else {
+      saveBlob(new Blob([speciesSummaryCsv(detections, context)], { type: 'text/csv;charset=utf-8' }), `${base}_species_summary.csv`);
+    }
+  }
+
   function downloadCsv(scope: 'all' | 'approved' = 'all') {
     if (!source || !detections.length) return;
     const start = new Date(recordingStart);
@@ -332,6 +347,7 @@ export default function Home() {
           </div>
           <div className="flex items-center gap-2">
             <Badge className="hidden border-[#39514c] bg-[#152625] px-2.5 text-[#a9bcb8] sm:flex" variant="outline"><span className="size-1.5 rounded-full bg-[#79b997]" />山口県・季節フィルター</Badge>
+            <a className="flex h-8 items-center gap-1.5 rounded-lg border border-[#39514c] px-2.5 text-xs text-[#a9bcb8] transition hover:bg-white/5" href="guide.html"><BookOpen className="size-3.5" />使い方</a>
             <Button aria-label="解析について" className="text-[#8da19e] hover:bg-white/5" onClick={() => window.alert('録音はブラウザ内で処理されます。音声を連続して測定し、1分ごとの周波数帯別の背景音から候補を抽出します。候補の160区間制限はありません。山口県・録音時期で種名候補を選び、種名を付けられない音声区間も「鳥声候補・種未確定」で残します。鳥の声かどうかも原音で確認してください。種未確定の候補は承認後も種未確定のまま保存されます。AI候補スコアは正解率ではありません。小さな声や雑音と重なる声の見逃しは残ります。')} size="icon" variant="ghost"><CircleHelp /></Button>
           </div>
         </div>
@@ -343,6 +359,7 @@ export default function Home() {
             <p className="mb-3 px-3 text-[10px] font-semibold uppercase tracking-[0.16em] text-[#536c68]">Workspace</p>
             <a className="flex items-center gap-3 rounded-lg bg-[#192928] px-3 py-2.5 text-sm font-medium text-[#f0f5ef]" href="#analysis"><AudioWaveform className="size-4 text-[#d8a64b]" />音声解析</a>
             <a className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-[#829692] transition hover:bg-white/5" href="#records"><FileAudio className="size-4" />検出結果</a>
+            <a className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-[#829692] transition hover:bg-white/5" href="guide.html"><BookOpen className="size-4" />使い方</a>
             <a className="flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm text-[#829692] transition hover:bg-white/5" href="https://github.com/birdnet-team/birdnet-live-app" rel="noreferrer" target="_blank"><Bird className="size-4" />判定モデル</a>
           </nav>
           <div className="mt-auto space-y-2">
@@ -424,11 +441,15 @@ export default function Home() {
             </div>
             <div className="flex flex-col justify-between gap-3 border-b border-white/7 px-4 py-4 xl:flex-row xl:items-center sm:px-5">
               <div><h2 className="text-sm font-medium text-[#dfe8e5]">AI候補 → 原音確認</h2><p className="mt-1 text-[11px] text-[#667e79]">{candidateCount ? `${candidateCount}区間の音声候補 · 種未確定 ${unresolvedCount}件 · 未確認 ${pendingCount}件 · 承認 ${approvedCount}件` : '種名を付けられない音声候補も原音確認用に残します'}</p></div>
-              <div className="flex flex-wrap items-center gap-2">
+              <div className="flex flex-wrap items-center gap-2 xl:justify-end">
                 <label className="flex h-8 items-center gap-2 rounded-lg border border-[#2c413d] bg-[#0a1717] px-2.5 text-xs text-[#809590]"><Search className="size-3.5" /><input aria-label="鳥の種類を検索" className="w-24 bg-transparent text-[#c6d2ce] outline-none placeholder:text-[#526a65]" onChange={(event) => setQuery(event.target.value)} placeholder="種名で検索" value={query} /></label>
                 <select aria-label="確認状態で絞り込み" className="h-8 rounded-lg border border-[#2c413d] bg-[#0a1717] px-2.5 text-xs text-[#9aada8] outline-none" onChange={(event) => setReviewFilter(event.target.value as 'all' | ReviewStatus)} value={reviewFilter}><option value="all">全確認状態</option><option value="pending">未確認</option><option value="approved">承認</option><option value="rejected">却下</option></select>
                 <Button className="border-[#2c413d] bg-transparent text-[#849a95] hover:bg-white/5" disabled={!detections.length} onClick={() => downloadCsv('all')} size="sm" variant="outline"><Download data-icon="inline-start" />全件CSV</Button>
                 <Button className="border-[#315342] bg-[#173126] text-[#91c7a7] hover:bg-[#1d3c2e]" disabled={!approvedCount} onClick={() => downloadCsv('approved')} size="sm" variant="outline"><CheckCircle2 data-icon="inline-start" />承認済み</Button>
+                <span aria-hidden="true" className="mx-0.5 h-5 w-px bg-white/10" />
+                <Button aria-label="Kaleidoscope形式のCSVを保存" className="border-[#2c413d] bg-transparent text-[#849a95] hover:bg-white/5" disabled={!detections.length} onClick={() => downloadFormat('kaleidoscope')} size="sm" title="Kaleidoscopeで読み込める形式（全候補・確認状態つき）" variant="outline"><Download data-icon="inline-start" />Kaleidoscope</Button>
+                <Button aria-label="Raven選択テーブルを保存" className="border-[#2c413d] bg-transparent text-[#849a95] hover:bg-white/5" disabled={!detections.length} onClick={() => downloadFormat('raven')} size="sm" title="Raven Pro / Liteで開ける選択テーブル（全候補・確認状態つき）" variant="outline"><Download data-icon="inline-start" />Raven</Button>
+                <Button aria-label="種別集計CSVを保存" className="border-[#2c413d] bg-transparent text-[#849a95] hover:bg-white/5" disabled={!detections.length} onClick={() => downloadFormat('summary')} size="sm" title="種ごとの候補数・承認・却下・未確認の件数" variant="outline"><Download data-icon="inline-start" />種別集計</Button>
               </div>
             </div>
             <div className="overflow-x-auto"><table className="w-full min-w-[980px] text-left"><thead className="border-b border-white/6 bg-[#0b1818] text-[10px] uppercase tracking-[0.1em] text-[#536c67]"><tr><th className="px-5 py-3 font-medium">位置</th><th className="px-4 py-3 font-medium">候補種</th><th className="px-4 py-3 font-medium">AI</th><th className="px-4 py-3 font-medium">地域・季節</th><th className="px-4 py-3 font-medium">時間</th><th className="px-4 py-3 font-medium">原音確認</th><th className="px-5 py-3" /></tr></thead><tbody>

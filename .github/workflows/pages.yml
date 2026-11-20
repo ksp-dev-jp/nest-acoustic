@@ -28,6 +28,7 @@ jobs:
       - run: npm run test:review
       - run: npm run test:audio
       - run: npm run test:audit
+      - run: npm run test:exports
       - run: npx tsc --noEmit
       - run: npm run build:pages
       - uses: actions/configure-pages@v5

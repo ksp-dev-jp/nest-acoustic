@@ -3,6 +3,7 @@
 長時間録音から鳥類の鳴き声候補を抽出し、山口県・季節フィルターと原音確認で判定するWebアプリ。
 
 共有用アプリ: https://ksp-dev-jp.github.io/nest-acoustic/
+利用者向けの使い方: https://ksp-dev-jp.github.io/nest-acoustic/guide.html（`public/guide.html`。アプリのヘッダーとサイドバーの「使い方」から開けます）
 
 ## 使い方
 
@@ -10,6 +11,12 @@
 2. 「解析開始」で候補を抽出します。初回は解析モデルをダウンロードします。
 3. 候補の原音を最後まで再生して、承認または却下します。
 4. 「承認済み」または「全件CSV」で結果を保存します。
+
+ほかのソフト向けに、全候補を確認状態つきで書き出せます（`lib/exports.ts`）。
+
+- 「Kaleidoscope」: BirdNET-Analyzerと同じ列構成のKaleidoscope形式CSV。ブラウザからは録音の保存場所が分からないため、INDIR・FOLDER列は空欄です。Kaleidoscopeが先頭の列名を読めるようBOMは付けません。
+- 「Raven」: Raven Pro / Lite用の選択テーブル（タブ区切り）。
+- 「種別集計」: 種ごとの候補数・承認・却下・未確認・最大スコア・最初と最後の検出日時。候補区間は重なることがあるため、件数は鳴いた回数ではありません。
 
 種名を付けられない音声区間も「鳥声候補・種未確定」で残します。「種名の状態」から絞り込み、原音を最後まで再生して「候補を承認」または「却下」を選べます。鳥の声かどうかも原音で確認してください。種未確定の候補を承認しても、鳥種は未確定のままです。種名スコア・地域スコアは空欄でCSVに出力します。鳥種照合が失敗した場合も、抽出済みの音声候補を種未確定として確認できます。
 
@@ -46,6 +53,7 @@ npm ci
 npm run test:review
 npm run test:audio
 npm run test:audit
+npm run test:exports
 npx tsc --noEmit
 npm run build:pages
 npm run preview:pages

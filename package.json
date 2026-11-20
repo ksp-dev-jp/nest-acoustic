@@ -13,6 +13,7 @@
     "test:review": "node --test scripts/review-session.test.mjs",
     "test:audio": "node --test scripts/candidate-extraction.test.mjs",
     "test:audit": "node --test scripts/audit-evaluation.test.mjs",
+    "test:exports": "node --test scripts/exports.test.mjs",
     "start": "wrangler dev --config dist/server/wrangler.json",
     "lint": "oxlint",
     "format": "oxfmt"

@@ -1,0 +1,227 @@
+<!doctype html>
+<html lang="ja">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="robots" content="noindex, nofollow">
+<meta name="description" content="NEST Acoustic の使い方：録音の読み込みから原音確認、結果の書き出しまで。">
+<link rel="icon" type="image/svg+xml" href="favicon.svg">
+<title>使い方 | NEST Acoustic</title>
+<style>
+  :root {
+    --bg: #081415; --panel: #0f1f1f; --panel-2: #132624; --line: #253b37; --ink: #e3ece8; --muted: #93a8a3;
+    --soft: #6f8782; --gold: #d8a64b; --green: #91c7a7; --warn: #e3b384;
+    color-scheme: dark;
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--ink); font-family: Arial, 'Hiragino Kaku Gothic ProN', 'Meiryo', sans-serif; line-height: 1.75; font-size: 15px; }
+  a { color: var(--green); }
+  header { position: sticky; top: 0; z-index: 5; background: rgba(8,20,21,.94); backdrop-filter: blur(10px); border-bottom: 1px solid var(--line); }
+  .bar { max-width: 1080px; margin: 0 auto; padding: 0 20px; height: 60px; display: flex; align-items: center; justify-content: space-between; gap: 16px; }
+  .brand { display: flex; align-items: center; gap: 10px; color: var(--ink); text-decoration: none; }
+  .logo { width: 32px; height: 32px; border-radius: 9px; background: var(--gold); display: grid; place-items: center; color: #101918; font-weight: 700; }
+  .brand b { letter-spacing: .14em; font-size: 15px; }
+  .brand small { color: var(--soft); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; margin-left: 6px; }
+  .back { display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 8px; background: var(--gold); color: #17201f; font-weight: 700; font-size: 13px; text-decoration: none; white-space: nowrap; }
+  .wrap { max-width: 1080px; margin: 0 auto; padding: 28px 20px 60px; display: grid; grid-template-columns: 210px minmax(0,1fr); gap: 36px; }
+  nav.toc { position: sticky; top: 84px; align-self: start; font-size: 13px; }
+  nav.toc p { color: var(--soft); font-size: 10px; letter-spacing: .16em; text-transform: uppercase; margin: 0 0 8px; }
+  nav.toc a { display: block; color: var(--muted); text-decoration: none; padding: 5px 10px; border-radius: 6px; }
+  nav.toc a:hover { background: rgba(255,255,255,.05); color: var(--ink); }
+  h1 { font-size: 28px; margin: 0 0 8px; letter-spacing: .02em; }
+  .lead { color: var(--muted); margin: 0 0 24px; }
+  h2 { font-size: 20px; margin: 40px 0 14px; padding-bottom: 8px; border-bottom: 1px solid var(--line); scroll-margin-top: 80px; }
+  h3 { font-size: 16px; margin: 22px 0 8px; color: var(--gold); }
+  p { margin: 0 0 12px; }
+  ul, ol { margin: 0 0 12px; padding-left: 22px; }
+  li { margin-bottom: 6px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; padding: 16px 18px; margin: 14px 0; }
+  .points { display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin: 18px 0 8px; }
+  .points .card { margin: 0; }
+  .points b { display: block; color: var(--gold); margin-bottom: 4px; }
+  .points span { color: var(--muted); font-size: 13px; }
+  ol.steps { list-style: none; padding: 0; counter-reset: step; }
+  ol.steps > li { counter-increment: step; position: relative; padding: 16px 18px 14px 62px; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; margin-bottom: 12px; }
+  ol.steps > li::before { content: counter(step); position: absolute; left: 18px; top: 16px; width: 30px; height: 30px; border-radius: 50%; background: var(--gold); color: #17201f; font-weight: 700; display: grid; place-items: center; }
+  ol.steps h3 { margin-top: 2px; color: var(--ink); }
+  .ui { display: inline-block; padding: 0 7px; border: 1px solid #3a524c; border-radius: 5px; background: var(--panel-2); font-size: 13px; white-space: nowrap; }
+  table { width: 100%; border-collapse: collapse; font-size: 14px; margin: 10px 0 16px; }
+  th, td { border: 1px solid var(--line); padding: 8px 10px; text-align: left; vertical-align: top; }
+  th { background: var(--panel-2); color: var(--muted); font-weight: 600; }
+  td:first-child { white-space: nowrap; }
+  .note { border-left: 3px solid var(--warn); background: #1d1a14; padding: 10px 14px; border-radius: 0 8px 8px 0; color: #e8d6c0; font-size: 14px; margin: 12px 0; }
+  .tip { border-left: 3px solid var(--green); background: #12221b; padding: 10px 14px; border-radius: 0 8px 8px 0; color: #cfe5d8; font-size: 14px; margin: 12px 0; }
+  dl { margin: 0; }
+  dt { font-weight: 700; margin-top: 14px; }
+  dd { margin: 4px 0 0; color: var(--muted); }
+  footer { color: var(--soft); font-size: 12px; margin-top: 40px; border-top: 1px solid var(--line); padding-top: 14px; }
+  @media (max-width: 820px) {
+    .wrap { grid-template-columns: 1fr; gap: 0; padding: 20px 16px 48px; }
+    nav.toc { position: static; margin-bottom: 8px; display: flex; flex-wrap: wrap; gap: 4px; }
+    nav.toc p { width: 100%; }
+    nav.toc a { padding: 4px 9px; border: 1px solid var(--line); }
+    .points { grid-template-columns: 1fr; }
+    h1 { font-size: 23px; }
+    .brand small { display: none; }
+    .table-scroll { overflow-x: auto; }
+    td:first-child { white-space: normal; }
+  }
+</style>
+</head>
+<body>
+<header>
+  <div class="bar">
+    <a class="brand" href="./"><span class="logo" aria-hidden="true">N</span><span><b>NEST</b><small>acoustic</small></span></a>
+    <a class="back" href="./">アプリを開く →</a>
+  </div>
+</header>
+
+<div class="wrap">
+  <nav class="toc" aria-label="目次">
+    <p>目次</p>
+    <a href="#overview">このアプリについて</a>
+    <a href="#before">使う前に</a>
+    <a href="#steps">使い方の流れ</a>
+    <a href="#exports">書き出せるファイル</a>
+    <a href="#resume">保存と再開</a>
+    <a href="#notes">注意事項</a>
+    <a href="#faq">よくある質問</a>
+    <a href="#audit">精度検証用ページ</a>
+  </nav>
+
+  <main>
+    <h1>NEST Acoustic の使い方</h1>
+    <p class="lead">長時間の録音から鳥の鳴き声の候補を抜き出し、AI が付けた種名の候補を、原音を聴いて承認・却下するためのアプリです。</p>
+
+    <section id="overview">
+      <h2>このアプリについて</h2>
+      <div class="points">
+        <div class="card"><b>録音は送信しません</b><span>解析はお使いのパソコンのブラウザの中で行います。録音ファイルがサーバーに送られることはありません。</span></div>
+        <div class="card"><b>候補を抜き出して確認</b><span>背景音より強い音を候補として抜き出し、BirdNET+ v3.0 で種名の候補を付けます。</span></div>
+        <div class="card"><b>最終判断は人の耳で</b><span>候補を最後まで再生してから承認・却下します。承認したものが確認済みの記録になります。</span></div>
+      </div>
+      <p>調査地域（山口県内5地域）と録音の時期から、その場所・時期に出現しやすい種に候補を絞り込みます。対象種（フクロウ、アオバズク、ヨタカ、トラツグミ、ミゾゴイ、ヒクイナ、コノハズク、ケリ、オオタカ）は、スコアが低くても候補に残します。</p>
+    </section>
+
+    <section id="before">
+      <h2>使う前に</h2>
+      <ul>
+        <li><strong>パソコンのブラウザで使ってください。</strong>スマートフォンでの動作は確認していません。</li>
+        <li><strong>初回はインターネット接続が必要です。</strong>解析を始めると、判定モデルを BirdNET の公式配布元から自動でダウンロードします。2回目以降はブラウザに保存したモデルを使います。</li>
+        <li><strong>対応する音声：</strong>WAV・MP3・FLAC・OGG。長時間の録音は PCM 形式の WAV を使ってください。少しずつ読み込むので、数時間の録音でも扱えます。</li>
+      </ul>
+      <div class="note">長時間の MP3 は、ブラウザが一度に全体を読み込むため、メモリ不足で止まることがあります。その場合は WAV に変換してからお使いください。</div>
+    </section>
+
+    <section id="steps">
+      <h2>使い方の流れ</h2>
+      <ol class="steps">
+        <li>
+          <h3>録音ファイルを選ぶ</h3>
+          <p>音声解析の画面で <span class="ui">音声を追加</span> を押し、録音ファイルを選びます。ファイル名の下に、形式・チャンネル数・サンプリングレート・長さが表示されます。</p>
+        </li>
+        <li>
+          <h3>録音開始日時と調査地域を確認する</h3>
+          <p><span class="ui">録音開始日時</span> は、ファイル名に「20260302_055000」のような日時があれば自動で入ります。見つからない場合はファイルの更新日時が入るので、<strong>必ず確認して、違っていれば直してください。</strong>日時は、地域・季節の絞り込み、夜間の判定、検出日時の計算に使います。</p>
+          <p><span class="ui">調査地域</span> は、萩市・山口市・下関市・岩国市・周南市から、録音地点に近いものを選びます。</p>
+          <div class="tip">Song Meter のファイル名（例：001D_260302_0550_1.wav）は年が2桁のため、自動では読み取れません。録音開始日時を手で入力してください。</div>
+        </li>
+        <li>
+          <h3>解析を始める</h3>
+          <p><span class="ui">解析開始</span> を押します。候補の抽出と種名の照合が進み、進み具合が表示されます。途中でやめるときは <span class="ui">中止</span> を押します。</p>
+          <p>解析時間は録音の長さとパソコンの性能によって変わります。2時間30分の録音では、候補が2,000件を超えることがあります。</p>
+        </li>
+        <li>
+          <h3>候補の一覧を見る</h3>
+          <p>「AI候補 → 原音確認」の一覧に、候補が録音内の位置・候補種・AIスコア・地域季節スコアとともに並びます。50件ずつ表示されます。</p>
+          <ul>
+            <li><span class="ui">種名で検索</span>：特定の種だけを表示します。</li>
+            <li><span class="ui">確認状態</span>：未確認・承認・却下で絞り込みます。</li>
+            <li><span class="ui">種名の状態</span>：「種未確定のみ」「種名候補あり」で絞り込みます。種名を付けられなかった音も「鳥声候補・種未確定」として残しています。</li>
+            <li><span class="ui">確認順の参考（試験）</span>：スコアの高い候補から確認したいときに使います。スコアが低くても雑音とは限りません。</li>
+            <li><span class="ui">表示：夜間のみ</span>：18時〜翌6時の候補だけを表示します。</li>
+          </ul>
+        </li>
+        <li>
+          <h3>原音を聴いて承認・却下する</h3>
+          <p>一覧から候補を選び、再生ボタンで原音を聴きます。<strong>最後まで再生すると</strong> <span class="ui">承認</span>・<span class="ui">却下</span> を選べるようになります。途中で止めた場合や再生に失敗した場合は、確認済みになりません。</p>
+          <ul>
+            <li>承認・却下を取り消すときは、<span class="ui">↺</span>（未確認に戻す）を押します。</li>
+            <li>種未確定の候補を承認しても、種名は未確定のまま記録されます。鳥の声かどうかの確認として使ってください。</li>
+            <li>オオタカには、録音時期から見た対象の鳴き声（鳴き交わし・餌乞いなど）が表示されます。音声から鳴き声の種類を判別したものではありません。</li>
+          </ul>
+        </li>
+        <li>
+          <h3>結果を書き出す</h3>
+          <p>一覧の右上のボタンで、結果をファイルに保存します。用途に合わせて選んでください（次の章）。<strong>作業が終わったら、必ずCSVを保存してください。</strong></p>
+        </li>
+      </ol>
+    </section>
+
+    <section id="exports">
+      <h2>書き出せるファイル</h2>
+      <div class="table-scroll">
+      <table>
+        <tr><th>ボタン</th><th>ファイル</th><th>中身・用途</th></tr>
+        <tr><td><span class="ui">全件CSV</span></td><td>〇〇_detections.csv</td><td>抽出した候補すべての一覧です。開始位置、検出日時、候補種（和名・学名・英名）、AI候補スコア、主要周波数、夜間／昼間、地域、地域季節スコア、原音確認の結果、判定日時などが入ります。Excel で開けます。</td></tr>
+        <tr><td><span class="ui">承認済み</span></td><td>〇〇_approved.csv</td><td>原音で承認した候補だけの一覧です（列は全件CSVと同じ）。<strong>確認済みの検出記録として使えます。</strong></td></tr>
+        <tr><td><span class="ui">Kaleidoscope</span></td><td>〇〇_kaleidoscope.csv</td><td>Wildlife Acoustics 社の Kaleidoscope で読み込める形式です（BirdNET-Analyzer の出力と同じ列構成）。全候補を出力し、末尾に原音確認の結果を付けます。</td></tr>
+        <tr><td><span class="ui">Raven</span></td><td>〇〇_raven.selection.table.txt</td><td>Raven Pro / Raven Lite で録音と一緒に開ける選択テーブルです。スペクトログラム上で候補の位置を確認できます。全候補を出力し、末尾に原音確認の結果を付けます。</td></tr>
+        <tr><td><span class="ui">種別集計</span></td><td>〇〇_species_summary.csv</td><td>種ごとの候補数・承認・却下・未確認の件数、最大AIスコア、最初と最後の検出日時です。Excel で開けます。</td></tr>
+        <tr><td><span class="ui">区間WAV</span></td><td>〇〇_時刻_種名.wav</td><td>選んだ候補1件の音声の切り出しです（候補の詳細欄にあるボタン）。報告書への添付や専門家への確認依頼に使えます。</td></tr>
+      </table>
+      </div>
+      <div class="note">
+        <strong>Kaleidoscope 形式の注意：</strong>ブラウザからは録音の保存場所が分からないため、<code>INDIR</code>（フォルダ）と <code>FOLDER</code> の列は空欄です。Kaleidoscope で使うときは、お手元の録音フォルダの場所を入力してください。このファイルは Kaleidoscope 用のため、Excel で開くと日本語が文字化けすることがあります。<br>
+        <strong>Raven の注意：</strong>録音ファイルと同じフォルダに置いてから開いてください。
+      </div>
+      <p>候補は音の立ち上がりに合わせて切り出しているため、候補どうしが時間的に重なることがあります。同じ鳴き声が複数の候補として数えられる場合があるので、種別集計の件数は「鳴いた回数」ではなく「確認対象の候補数」として扱ってください。</p>
+    </section>
+
+    <section id="resume">
+      <h2>保存と再開</h2>
+      <ul>
+        <li>候補と確認結果は、<strong>お使いのブラウザに自動で保存</strong>されます。同じ録音ファイルを選び直すと、続きから作業できます。</li>
+        <li>録音そのものは保存しません。再開するときは同じ録音ファイルを選んでください。別のファイルの確認結果が混ざることはありません。</li>
+        <li>録音開始日時や調査地域を変えて解析し直すと、それまでの候補と確認結果は消えます。必要なら先にCSVを保存してください。</li>
+      </ul>
+      <div class="note">ブラウザの履歴・サイトデータを削除すると、保存していた確認結果も消えます。また、別のパソコンや別のブラウザとは共有されません。作業の区切りごとにCSVを保存してください。</div>
+    </section>
+
+    <section id="notes">
+      <h2>注意事項</h2>
+      <ul>
+        <li><strong>候補は自動同定の確定結果ではありません。</strong>原音で承認したものを結果として扱ってください。</li>
+        <li><strong>AIスコアは正解率ではありません。</strong>「94%」は、94%の確率で正しいという意味ではありません。</li>
+        <li><strong>見逃しはあります。</strong>小さい声、雑音に埋もれた声、長く続いて背景音とみなされた声は、候補に入らないことがあります。「候補がない＝鳴いていない」とは判断できません。</li>
+        <li><strong>候補には雑音も含まれます。</strong>見逃しを減らすことを優先しているためです。</li>
+        <li>夜間は録音開始日時から計算した18時〜翌6時です。日の出・日の入りの時刻ではありません。</li>
+      </ul>
+    </section>
+
+    <section id="faq">
+      <h2>よくある質問</h2>
+      <dl>
+        <dt>解析中にブラウザのタブを閉じても大丈夫ですか？</dt>
+        <dd>解析は止まります。解析が終わった後の確認結果は自動で保存されているので、同じ録音を選び直せば続きから作業できます。</dd>
+        <dt>候補が多すぎて確認しきれません。</dt>
+        <dd>「種名で検索」で対象種に絞る、「確認順の参考（試験）」でスコアの高い候補から確認する、などの方法があります。絞り込みは表示だけで、候補そのものは消えません。</dd>
+        <dt>録音開始日時を間違えて解析しました。</dt>
+        <dd>日時を直して、もう一度「解析開始」を押してください。地域・季節の絞り込みと検出日時が正しくなります（それまでの確認結果は消えます）。</dd>
+        <dt>複数の人で確認結果を共有できますか？</dt>
+        <dd>できません。確認結果はそれぞれのブラウザに保存されます。共有するときはCSVを受け渡してください。</dd>
+      </dl>
+    </section>
+
+    <section id="audit">
+      <h2>精度検証用ページ</h2>
+      <p><a href="audit.html">精度検証用ページ（audit.html）</a>は、専門家の方に正解データを作っていただくための画面です。解析結果のファイルと元の録音を読み込み、候補がない時間も含めて3秒ごとに「鳥声あり／鳥声なし／判断保留」と鳥種を記録できます。記録した内容はJSONファイルで保存・再開できます。こちらも録音や記録内容を外部に送信しません。</p>
+    </section>
+
+    <footer>
+      判定モデル：BirdNET+ v3.0-preview3.1（音声）／GeoModel v3.0.4（地域・季節）。モデルはブラウザから公式配布元へアクセスして取得します。
+    </footer>
+  </main>
+</div>
+</body>
+</html>
